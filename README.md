@@ -1,5 +1,4 @@
 # tech3bsp
----
 An importer addon for Godot to import an idTech3 BSP file as a Godot scene.
 
 Currently supports "Quake 3 Arena" and Return to "Castle Wolfenstein" BSPs, with potential plans to add Raven BSP (Jedi Outcast, etc.)
@@ -25,48 +24,49 @@ With regards to entity imports, the addon will try and push entity keys (e.g. `a
 
 
 ### Import Options
-Unit Scale: 
+**Unit Scale:**
 - Scale the resulting scene map size. The default value results in roughly equivalent scaling to Quake 3 Arena. Defaults to 32.0.
 
-Light Brightness Scale: 
+**Light Brightness Scale:**
 - Scale light brightness for imported lights (does not affect lightmaps or the lightgrid). Defaults to 16.0.
 
-Entity Map: 
+**Entity Map:**
 - A path to a ConfigFile where entity remaps can be defined. Please check the "examples" directory for an example file.
 
-Print Missing Entities: 
+**Print Missing Entities:**
 - Whether to print to the console when entity remaps are not present (this can be noisy on entity-heavy BSPs if you don't have remaps set up yet). Enabled by default.
 
-Materials Path: 
+**Materials Path:**
 - Path for material overrides. The BSP stores textures with a pattern similar to "textures/base/wall01" - the addon will reinterpret this to import Godot materials, so the pattern "res://materials//{texture_name}.material" will load "res://materials/base/wall01.material")
 
-Water, Slime, and Lava Scenes: 
+**Water, Slime, and Lava Scenes:**
 - PackedScene's for BSP liquids, please see the example scenes in the "examples" directory.
 
-Import Lights: 
+**Import Lights:**
 - If a map is compiled with `-keeplights` the light entities can be imported with this enabled. If lightmaps are also imported, these lights will not affect anything on the same culling layer as the map scene.
 
-Entity Shadow Light: 
+**Entity Shadow Light:**
 - The entire scene is lit via a generated DirectionalLight3D (see special notes below). This toggles whether this light will also cast shadows from meshes other than the map. These meshes will need to be on visibility layers other than 1 to do any shadowcasting. Disabled by default.
 
-Import Billboards: 
+**Import Billboards:**
 - Whether to import lightflares. This is a WIP as its not critical for my own project. Disabled by default.
 
-Import Lightmaps: 
+**Import Lightmaps:**
 - Whether to import pre-baked lighting data from the BSP. This will be stored in the scene itself, rather than saved as individual images to the "res" directory. Enabled by default.
 
-Import Lightgrid: 
+**Import Lightgrid:**
 - Whether to import the lightgrid for lighting dynamic meshes. Default enabled.
 
-Split Mesh: 
+**Split Mesh:**
 - Splits the mesh up by surfaces, though at some point this will be reworked to either split along a grid or somehow use vis data from the BSP itself. Godot seems to run best with a small amount of meshes that contain a large amount of geometry, rather than many meshes containing a small amount of geometry, so this is disabled by default.
 
-Occlusion Culling: 
+**Occlusion Culling:**
 - Generates occlusion geometry, still somewhat WIP. Default disabled.
 
-Remove Skies:
+**Remove Skies:**
 - Allows skipping importing sky geometry, if you want to use Godot skies instead. Disabled by default.
-Patch Detail:
+
+**Patch Detail:**
 - How much tesselated geometry should be generated for patches, higher means more detailed. Default 5 (probably shouldn't go much higher than this).
 
 
