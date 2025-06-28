@@ -7,3 +7,12 @@ dist/
 *.godot-import
 *.uid
 *.log
+*.translation
+
+export.cfg
+export_presets.cfg
+
+# Mono-specific ignores (shouldn't apply here but just in case later...)
+.mono/
+data_*/
+mono_crash.*.json
