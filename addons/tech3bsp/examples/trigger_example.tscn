@@ -1,0 +1,27 @@
+[gd_scene load_steps=2 format=3 uid="uid://daharohu568gg"]
+
+[sub_resource type="GDScript" id="GDScript_f6705"]
+script/source = "extends Area3D
+
+
+func _ready() -> void:
+	body_entered.connect(_body_entered)
+	body_exited.connect(_body_exited)
+
+
+func _body_entered(body: Node3D) -> void:
+	if body is StaticBody3D: return
+	print(body, \" entered.\")
+
+
+func _body_exited(body: Node3D) -> void:
+	if body is StaticBody3D: return
+	print(body, \" exited.\")
+"
+
+[node name="trigger_example" type="Area3D"]
+collision_layer = 0
+gravity = 0.0
+linear_damp = 11.464
+angular_damp = 7.676
+script = SubResource("GDScript_f6705")

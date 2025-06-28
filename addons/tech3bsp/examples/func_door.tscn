@@ -1,0 +1,115 @@
+[gd_scene load_steps=3 format=3 uid="uid://cnrx0u2l7vr5r"]
+
+[sub_resource type="GDScript" id="GDScript_lby6g"]
+script/source = "extends AnimatableBody3D
+# A very simple example func_door.
+# does not fully respect all func_door properties
+# however should serve as a starting place for your own doors!
+
+@export var angles := Vector3(-90, 0, 0)
+@export var angle := 180
+@export var speed: float = 400.0
+@export var wait := 2.0
+@export var lip: float = 8.0
+# \"team\" can let us define doors that should open simultaneously
+@export var team: String = \"\"
+
+var mesh_instance: MeshInstance3D
+var open := false
+var movement_vector = Vector3(90, 0, 0)
+var duration := 1.0
+
+
+func angle_to_direction(a: float) -> Vector3:
+	if a == -1.0:
+		return Vector3.UP
+	elif a == -2.0:
+		return Vector3.DOWN
+	else:
+		return Vector3(0, a, 0)
+
+
+func _ready() -> void:
+	mesh_instance = get_node_or_null(\"MeshInstance3D\")
+	if !mesh_instance: queue_free()
+	input_ray_pickable = false
+	# could also do this as signals, \"group\" is a lot like \"team\" though...
+	if team:
+		add_to_group(team)
+	var direction := Vector3(-1, 0, 0)
+	if angles != Vector3(-90, 0, 0):
+		# won't take actual rotations in the angles into account
+		direction = Vector3(angles.x, angles.z, angles.y).normalized()
+		if direction == Vector3.ZERO:
+			direction = Vector3(-1, 0, 0)
+	elif angle != 180:
+		direction = angle_to_direction(angle)
+	# TODO: if the door has multiple meshes, this will be inaccurate!
+	movement_vector = mesh_instance.mesh.get_aabb().size * direction
+	collision_mask = 2
+	var collision_shape: CollisionShape3D = $Area3D/CollisionShape3D
+
+	# TODO: make unit scale global?
+	speed = speed * (1.0 / 32.0)
+	lip = lip * (1.0 / 32.0)
+
+	var axis := movement_vector.abs().max_axis_index()
+	movement_vector[axis] -= lip * sign(movement_vector[axis])
+
+	$Area3D.body_entered.connect(_body_entered)
+	$Area3D.body_exited.connect(_body_exited)
+	var mesh_aabb := mesh_instance.mesh.get_aabb()
+	var center := mesh_aabb.position + mesh_aabb.size * 0.5
+	duration = direction.length() / speed
+	collision_shape.position = center
+	collision_shape.shape.size.x += mesh_aabb.size.x + 1
+	collision_shape.shape.size.y = mesh_aabb.size.y
+	collision_shape.shape.size.z += mesh_aabb.size.z + 1
+
+
+func door_open() -> void:
+	# works but doesn't report collisions :(
+	var door_tween := get_tree().create_tween()
+	door_tween.tween_property(self, \"position\", movement_vector, duration)
+	open = true
+
+
+func door_close() -> void:
+	var door_tween := get_tree().create_tween()
+	door_tween.tween_interval(wait)
+	door_tween.tween_property(self, \"position\", Vector3.ZERO, duration)
+	await door_tween.finished
+	open = false
+
+
+func _body_entered(body: Node3D) -> void:
+	if body is not CharacterBody3D: return
+	if open:
+		return
+	if is_in_group(team):
+		get_tree().call_group(team, \"door_open\")
+	else:
+		door_open()
+
+
+func _body_exited(body: Node3D) -> void:
+	if body is not CharacterBody3D: return
+	if !open:
+		return
+	if is_in_group(team):
+		get_tree().call_group(team, \"door_close\")
+	else:
+		door_close()
+"
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_lby6g"]
+
+[node name="func_door" type="AnimatableBody3D"]
+script = SubResource("GDScript_lby6g")
+
+[node name="Area3D" type="Area3D" parent="."]
+top_level = true
+collision_layer = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
+shape = SubResource("BoxShape3D_lby6g")
