@@ -1,0 +1,9 @@
+.import/
+.godot/
+.editor/
+dist/
+
+*.import
+*.godot-import
+*.uid
+*.log
