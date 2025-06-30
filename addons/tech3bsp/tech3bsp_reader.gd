@@ -413,7 +413,7 @@ func split_face_groups(dict: Dictionary) -> Array[Dictionary]:
 	var chunks: Array[Dictionary]
 	var current_chunk: Dictionary = {}
 	var counter := 0
-
+	
 	for key in dict.keys():
 		current_chunk[key] = dict[key]
 		counter += 1
@@ -1415,7 +1415,7 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 	if brush_chunks.is_empty() or brush_faces.is_empty():
 		return
 
-	var big_mesh: ArrayMesh = null
+	var big_meshes: Array[ArrayMesh]
 
 	var split_mesh := false
 	# bmodels are already kind of "split" anyway since they aren't part of the static world.
@@ -1426,10 +1426,9 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 		# play nice with Godot...
 		# so for now just split surfaces into individual meshes here.
 		split_mesh = true
-	else:
-		big_mesh = ArrayMesh.new()
 
 	for brush_chunk in brush_chunks:
+		var big_mesh := ArrayMesh.new()
 		for brush_face: Array in brush_chunk:
 			var texture_id: int = brush_face[0]
 			var lightmap_id: int = brush_face[1]
@@ -1455,7 +1454,8 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 
 			surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 			surface_tool.set_material(material)
-			var offset = 0
+			var offset := 0
+
 			for face: BSPFace in brush_faces[brush_face]:
 				for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
 					surface_tool.set_normal(vertices[v].normal)
@@ -1503,26 +1503,30 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 					occluder_instance.owner = bsp_scene
 			else:
 				surface_tool.commit(big_mesh)
+		big_meshes.append(big_mesh)
 
 	if !split_mesh:
-		var mesh_instance := MeshInstance3D.new()
-		#mesh_instance.name = "MeshInstance3D_BrushGeometry"
-		mesh_instance.mesh = big_mesh
-		if options.import_lights:
-			mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
-		parent.add_child(mesh_instance, true)
-		mesh_instance.owner = bsp_scene
-		if options.occlusion_culling:
-			var occluder_instance := OccluderInstance3D.new()
-			occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
-			parent.add_child(occluder_instance, true)
-			occluder_instance.owner = bsp_scene
-
-	# if the user is NOT importing lightmaps and NOT splitting the mesh
-	# let's make it possible to use Godot's lightmapper.
-	if !options.import_lightmaps and !split_mesh:
-		var texel_size: float = (1.0 / options.unit_scale) * 4.0
-		big_mesh.lightmap_unwrap(bsp_scene.transform, texel_size)
+		# since meshes have a maximum surface size of "RenderingServer.MAX_MESH_SURFACES" we still need to split meshes along that.
+		# otherwise it's error city and incomplete mesharrays
+		for big_mesh: ArrayMesh in big_meshes:
+			var mesh_instance := MeshInstance3D.new()
+			#mesh_instance.name = "MeshInstance3D_BrushGeometry"
+			mesh_instance.mesh = big_mesh
+			if options.import_lights:
+				mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+			parent.add_child(mesh_instance, true)
+			mesh_instance.owner = bsp_scene
+			if options.occlusion_culling:
+				var occluder_instance := OccluderInstance3D.new()
+				occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
+				parent.add_child(occluder_instance, true)
+				occluder_instance.owner = bsp_scene
+#
+			# if the user is NOT importing lightmaps and NOT splitting the mesh
+			# let's make it possible to use Godot's lightmapper.
+			if !options.import_lightmaps and !split_mesh:
+				var texel_size: float = (1.0 / options.unit_scale) * 4.0
+				big_mesh.lightmap_unwrap(bsp_scene.transform, texel_size)
 
 
 # TODO: needs to not incorporate transparent and detail geometry, etc.
