@@ -1225,13 +1225,13 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			var mesh := ArrayMesh.new()
 			var texture_id: int = patch_group[0]
 			var lightmap_id: int = patch_group[1]
-			var surface_flags: int = textures[texture_id].flags
-			var content_flags: int = textures[texture_id].content_flags
+			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
+			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
 			var collision_faces: PackedVector3Array
 
 			# TODO: shaders can maybe override these flags, so these are not reliable
-			#if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-				#continue
+			if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+				continue
 
 			var metadata := {
 					"texture_name" : textures[texture_id].name,
@@ -1432,21 +1432,24 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 		for brush_face: Array in brush_chunk:
 			var texture_id: int = brush_face[0]
 			var lightmap_id: int = brush_face[1]
+			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
+			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
 			var translucent := false
+
 			# TODO: shaders can maybe override these flags, so these are not reliable
-			#if textures[texture_id].flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-				#continue
+			if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+				continue
 			if options.remove_skies:
-				if textures[texture_id].flags & SURFACE_FLAGS.SKY:
+				if surface_flags & SURFACE_FLAGS.SKY:
 					continue
 
-			if textures[texture_id].content_flags & CONTENT_FLAGS.FOG:
+			if content_flags & CONTENT_FLAGS.FOG:
 				# handled in collision generation instead
 				# TODO: compatibility fallback fog effect?
 				continue
 
 			# TODO: idtech3 shaders can overwrite this stuff...
-			if textures[texture_id].content_flags & CONTENT_FLAGS.TRANSLUCENT:# and not textures[texture_id].content_flags & (CONTENT_FLAGS.LAVA | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.WATER | CONTENT_FLAGS.FOG):
+			if content_flags & CONTENT_FLAGS.TRANSLUCENT:# and not textures[texture_id].content_flags & (CONTENT_FLAGS.LAVA | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.WATER | CONTENT_FLAGS.FOG):
 				translucent = true
 
 			var surface_tool := SurfaceTool.new()
