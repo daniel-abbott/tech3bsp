@@ -832,7 +832,7 @@ func parse_light_grid(light_grid_lump) -> void:
 		return
 	
 	light_grid_offset = tech3_to_gd(models[0].bounds_min)
-	light_grid_normalize = (size * grid_size) / 32.0
+	light_grid_normalize = (size * grid_size) / options.unit_scale
 
 	var ambient_images: Array[Image]
 	var directional_images: Array[Image]
@@ -1227,11 +1227,15 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			var lightmap_id: int = patch_group[1]
 			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
 			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
-			var collision_faces: PackedVector3Array
 
-			# TODO: shaders can maybe override these flags, so these are not reliable
-			if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+			# Pretty sure we can just jump out if it's a fog patch
+			# Godot fog volumes can't have arbitary shapes
+			# ... well, they sort of can with density textures...
+			# ugh... TODO
+			if content_flags & CONTENT_FLAGS.FOG:
 				continue
+
+			var collision_faces: PackedVector3Array
 
 			var metadata := {
 					"texture_name" : textures[texture_id].name,
@@ -1288,18 +1292,15 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 				surface_tool.set_material(material)
 				surface_tool.commit(mesh)
 
-			var mesh_instance := MeshInstance3D.new()
-			#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
-			mesh_instance.mesh = mesh
-			parent.add_child(mesh_instance, true)
-			mesh_instance.owner = bsp_scene
-
-			# Pretty sure we can just jump out now if it's a fog patch
-			# Godot fog volumes can't have arbitary shapes
-			# ... well, they sort of can with density textures...
-			# ugh... TODO
-			if content_flags & CONTENT_FLAGS.FOG:
-				continue
+			# patches can be used for collisions only (OpenArena does this)
+			# however since we're generating them from triangle meshes, we still need the MESH
+			# but not necessarily the mesh INSTANCE... so just don't make one
+			if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+				var mesh_instance := MeshInstance3D.new()
+				#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
+				mesh_instance.mesh = mesh
+				parent.add_child(mesh_instance, true)
+				mesh_instance.owner = bsp_scene
 			
 			# move along if there aren't any collisions to generate.
 			if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
