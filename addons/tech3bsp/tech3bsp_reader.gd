@@ -1221,6 +1221,8 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 		return
 	
 	for patch_chunk in patch_chunks:
+		# since the mesh is generated in the inner loop we aren't actually using chunks right now
+		# going to leave it alone unless I ever actually see a situation where a patch with >256 faces exists.'
 		for patch_group: Array in patch_chunk:
 			var mesh := ArrayMesh.new()
 			var texture_id: int = patch_group[0]
