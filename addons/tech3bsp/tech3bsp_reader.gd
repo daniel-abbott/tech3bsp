@@ -2,20 +2,10 @@ extends Node
 class_name Tech3BSPReader
 
 const LUMP_COUNT = 17 # TODO: Raven BSP's have 18, there's a LIGHTARRAY lump, not sure what it's for yet.
-
-# TODO: support arbitrary lightmap sizes. q3map2 can scale lightmaps
-# however the LIGHTMAP lump becomes 0 bytes when I compile...
-# Where's All the Data?
-enum LIGHTMAP_SIZES {
-	DEFAULT = 128,
-	#TEST = 512
-}
-
-enum LIGHTMAP_LENGTHS {
-	DEFAULT = 49152,
-	#TEST = 786432
-}
-
+const MAX_MESH_SURFACES = RenderingServer.MAX_MESH_SURFACES
+const DEFAULT_LIGHTMAP_SIZE = 128
+const DEFAULT_LIGHTMAP_LENGTH = 49152
+const POSSIBLE_IMAGE_EXTENSIONS = ["bmp", "dds", "ktx", "exr", "hdr", "jpg", "jpeg", "png", "tga", "svg", "webp"]
 
 var bsp_scene: BSPScene # the final product
 
@@ -36,7 +26,7 @@ var vertices: Array[BSPVertex]
 var indices: Array[int] # meshverts in BSP terms
 var effects: Array[BSPEffect] # seems to be only volumetric fog?
 var faces: Array[BSPFace]
-var lightmaps: Array[ImageTexture]
+var lightmaps: Array[Texture]
 var vis_data: BSPVisData
 
 var light_grid_normalize := Vector3.ZERO
@@ -409,7 +399,6 @@ func clear_data() -> void:
 
 
 func split_face_groups(dict: Dictionary) -> Array[Dictionary]:
-	const CHUNK_SIZE = RenderingServer.MAX_MESH_SURFACES
 	var chunks: Array[Dictionary]
 	var current_chunk: Dictionary = {}
 	var counter := 0
@@ -418,7 +407,7 @@ func split_face_groups(dict: Dictionary) -> Array[Dictionary]:
 		current_chunk[key] = dict[key]
 		counter += 1
 
-		if counter >= CHUNK_SIZE:
+		if counter >= MAX_MESH_SURFACES:
 			chunks.append(current_chunk.duplicate())
 			current_chunk.clear()
 			counter = 0
@@ -452,6 +441,18 @@ func face_groups(model: BSPModel, face_types: Array[FACE_TYPE]) -> Dictionary:
 	return model_faces
 
 
+# TODO: I'm being lazy with patches right now, just split them when we hit MAX_MESH_SURFACES
+func split_patches(patches: Array) -> Array:
+	var result := []
+	var i := 0
+	
+	while i < patches.size():
+		result.append(patches.slice(i, MAX_MESH_SURFACES))
+		i += MAX_MESH_SURFACES
+	
+	return result
+
+
 # Use the maps texture name to perform a lookup in a user-defined
 # materials path matching a string
 # e.g. "textures/liquids/water_02" becomes
@@ -479,7 +480,7 @@ func material_from_path(texture_id: int, lightmap_id: int) -> Material:
 	# for lightmaps to work we have to make some assumptions,
 	# the shader being used must have some uniform like "lightmap_texture"
 	# so it will have to be a custom shader, this won't work for StandardMaterial3D.
-	if material is ShaderMaterial and options.import_lightmaps and lightmap_id > 0:
+	if !lightmaps.is_empty() and material is ShaderMaterial and options.import_lightmaps and lightmap_id > 0:
 		material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
 	return material
 
@@ -490,8 +491,7 @@ func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 	var face_texture: Texture2D
 	var tex_path: String = (textures[texture_id].name).replace("textures/", options.textures_path)
 	
-	const POSSIBLE_EXTENSIONS = ["bmp", "dds", "ktx", "exr", "hdr", "jpg", "jpeg", "png", "tga", "svg", "webp"]
-	for ext: String in POSSIBLE_EXTENSIONS:
+	for ext: String in POSSIBLE_IMAGE_EXTENSIONS:
 		var possible_file := "%s.%s" % [tex_path, ext]
 		if FileAccess.file_exists(possible_file):
 			face_texture = load(possible_file)
@@ -524,7 +524,7 @@ func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 	
 	# this check is probably unnecessary at this point, but just in case
 	if material is ShaderMaterial:
-		if options.import_lightmaps and lightmap_id >= 0:
+		if !lightmaps.is_empty() and options.import_lightmaps and lightmap_id >= 0:
 			# Doing it as another pass loses us ~500 FPS
 			# TODO: make it optional and put that caveat into readme
 			#var lightmap_material := ShaderMaterial.new()
@@ -768,18 +768,39 @@ func parse_faces(faces_lump) -> void:
 
 
 func parse_lightmaps(lightmap_lump) -> void:
-	var lightmap_length = LIGHTMAP_LENGTHS.DEFAULT
-	var current_lightmap_size = LIGHTMAP_SIZES.DEFAULT
-	
 	bsp_file.seek(lightmap_lump.offset)
-	var count: int = lightmap_lump.length / lightmap_length
+	var count: int = lightmap_lump.length / DEFAULT_LIGHTMAP_LENGTH
 	print("lightmap lump length: ", lightmap_lump.length)
-	print("lightmaps: ", count)
 	
+	if !count: # maybe we're using external lightmaps?
+		# the "traditional" way seems to be to have a folder in the same directory as the BSP
+		# which contains the external lightmaps, so let's just check for that.
+		var bsp_path := bsp_file.get_path().rstrip(".bsp")
+		var dir := DirAccess.open(bsp_path)
+		if dir:
+			dir.list_dir_begin()
+			var entry := dir.get_next()
+
+			while entry != "":
+				if not POSSIBLE_IMAGE_EXTENSIONS.has(entry.get_extension()):
+					entry = dir.get_next()
+					continue
+				var ext_lm_image: CompressedTexture2D = load("%s/%s" % [bsp_path, entry])
+				lightmaps.append(ext_lm_image)
+				entry = dir.get_next()
+		else:
+			print("No external or internal lightmaps found, abandoning lightmap import.")
+			return
+
+		lightmaps.reverse() # gotta flip the order apparently? TODO: test on more large lightmaps!
+		print("external lightmaps: ",  lightmaps.size())
+		return
+	
+	print("internal lightmaps: ", count)
 	for i in range(count):
-		var lightmap_bytes := bsp_file.get_buffer(lightmap_length)
+		var lightmap_bytes := bsp_file.get_buffer(DEFAULT_LIGHTMAP_LENGTH)
 		var lightmap_colors: Color
-		var pixel_size: int = current_lightmap_size
+		var pixel_size: int = DEFAULT_LIGHTMAP_SIZE
 		var base_tex: Image
 		# try to autodetect linear vs. sRGB lightmaps
 		if worldspawn.has("_q3map2_cmdline") and worldspawn["_q3map2_cmdline"].contains("-nosRGBlight"):
@@ -788,10 +809,10 @@ func parse_lightmaps(lightmap_lump) -> void:
 			base_tex = Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8) # sRGB lightmap
 
 		var l = 0
-		for j in range(pixel_size):
-			for k in range(pixel_size):
+		for y in range(pixel_size):
+			for x in range(pixel_size):
 				lightmap_colors = scale_color(Color(lightmap_bytes[l], lightmap_bytes[l + 1], lightmap_bytes[l + 2]))
-				base_tex.set_pixel(k, j, lightmap_colors)
+				base_tex.set_pixel(x, y, lightmap_colors)
 				l += 3
 		
 		base_tex.generate_mipmaps()
@@ -801,7 +822,7 @@ func parse_lightmaps(lightmap_lump) -> void:
 		#base_tex.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
 		var tex = ImageTexture.create_from_image(base_tex)
 		lightmaps.append(tex)
-		# TODO: optional lightmap image saving?
+		# TODO: optional internal lightmap image saving?
 	#for lm in range(lightmaps.size()):
 		#ResourceSaver.save(lightmaps[lm], "res://%s-%d.png" % ["lightmap", lm])
 
@@ -1222,7 +1243,7 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 	
 	for patch_chunk in patch_chunks:
 		# since the mesh is generated in the inner loop we aren't actually using chunks right now
-		# going to leave it alone unless I ever actually see a situation where a patch with >256 faces exists.'
+		# going to leave it alone unless I ever actually see a situation where a patch with >256 faces exists.
 		for patch_group: Array in patch_chunk:
 			var mesh := ArrayMesh.new()
 			var texture_id: int = patch_group[0]
@@ -1272,66 +1293,75 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 								patch["colors"].append(bsp_vertex.color)
 						patches.append(patch)
 
-			for patch: Dictionary in patches:
-				#tessellate_patch_unified(patch)
-				var uvs := tessellate_patch_uvs(patch.uvs, options.patch_detail)
-				var uv2s := tessellate_patch_uvs(patch.uv2s, options.patch_detail)
-				var colors := tessellate_patch_colors(patch.colors, options.patch_detail)
-				var geometry := tessellate_patch(patch.verts, options.patch_detail)
-				collision_faces.append_array(geometry)
+			# HACK: patches should have verts, etc. deduped to reduce potential surfaces
+			# this is just a workaround to avoid error.
+			# e.g. https://lvlworld.com/review/id:2091
+			# FIXME: WRATH maps have sooooo many patches...
+			var patch_splits := split_patches(patches)
 
-				surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-				for i in range(geometry.size()):
-					surface_tool.set_uv(uvs[i])
-					surface_tool.set_uv2(uv2s[i])
-					if options.import_vertex_colors:
-						if !options.import_lightmaps or lightmap_id < 0:
-							surface_tool.set_color(colors[i])
-					surface_tool.add_vertex(geometry[i])
+			for patch_split: Array in patch_splits:
+				for patch: Dictionary in patch_split:
+					#tessellate_patch_unified(patch)
+					var uvs := tessellate_patch_uvs(patch.uvs, options.patch_detail)
+					var uv2s := tessellate_patch_uvs(patch.uv2s, options.patch_detail)
+					var colors := tessellate_patch_colors(patch.colors, options.patch_detail)
+					var geometry := tessellate_patch(patch.verts, options.patch_detail)
+					collision_faces.append_array(geometry)
 
-				surface_tool.generate_normals()
-				surface_tool.generate_tangents()
-				surface_tool.set_material(material)
-				surface_tool.commit(mesh)
+					surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+					for i in range(geometry.size()):
+						surface_tool.set_uv(uvs[i])
+						surface_tool.set_uv2(uv2s[i])
+						if options.import_vertex_colors:
+							if !options.import_lightmaps or lightmap_id < 0:
+								surface_tool.set_color(colors[i])
+						surface_tool.add_vertex(geometry[i])
 
-			# patches can be used for collisions only (OpenArena does this)
-			# however since we're generating them from triangle meshes, we still need the MESH
-			# but not necessarily the mesh INSTANCE... so just don't make one
-			if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-				var mesh_instance := MeshInstance3D.new()
-				#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
-				mesh_instance.mesh = mesh
-				parent.add_child(mesh_instance, true)
-				mesh_instance.owner = bsp_scene
-			
-			# move along if there aren't any collisions to generate.
-			if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
-				continue
-			
-			var collision_parent # can be a liquid scene
-			var concave_polygon_shape := ConcavePolygonShape3D.new()
-			var collision_shape := CollisionShape3D.new()
-			collision_shape.shape = concave_polygon_shape
-			concave_polygon_shape.set_faces(collision_faces)
-			
-			if content_flags & CONTENT_FLAGS.WATER:
-				collision_parent = options.water_scene.instantiate()
-			elif content_flags & CONTENT_FLAGS.SLIME:
-				collision_parent = options.slime_scene.instantiate()
-			elif content_flags & CONTENT_FLAGS.LAVA:
-				collision_parent = options.lava_scene.instantiate()
-			else:
-				if parent is CollisionObject3D:
-					collision_parent = parent
+					surface_tool.index()
+					surface_tool.generate_normals()
+					surface_tool.generate_tangents()
+					surface_tool.set_material(material)
+					surface_tool.commit(mesh)
+					surface_tool.clear()
+
+				# patches can be used for collisions only (OpenArena does this)
+				# however since we're generating them from triangle meshes, we still need the MESH
+				# but not necessarily the mesh INSTANCE... so just don't make one
+				if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+					var mesh_instance := MeshInstance3D.new()
+					#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
+					mesh_instance.mesh = mesh
+					parent.add_child(mesh_instance, true)
+					mesh_instance.owner = bsp_scene
+				
+				# move along if there aren't any collisions to generate.
+				if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
+					continue
+				
+				var collision_parent # can be a liquid scene
+				var concave_polygon_shape := ConcavePolygonShape3D.new()
+				var collision_shape := CollisionShape3D.new()
+				collision_shape.shape = concave_polygon_shape
+				concave_polygon_shape.set_faces(collision_faces)
+				
+				if content_flags & CONTENT_FLAGS.WATER:
+					collision_parent = options.water_scene.instantiate()
+				elif content_flags & CONTENT_FLAGS.SLIME:
+					collision_parent = options.slime_scene.instantiate()
+				elif content_flags & CONTENT_FLAGS.LAVA:
+					collision_parent = options.lava_scene.instantiate()
 				else:
-					collision_parent = StaticBody3D.new()
+					if parent is CollisionObject3D:
+						collision_parent = parent
+					else:
+						collision_parent = StaticBody3D.new()
 
-			if collision_parent != parent:
-				parent.add_child(collision_parent, true)
-			collision_parent.add_child(collision_shape, true)
-			collision_parent.owner = bsp_scene
-			collision_shape.owner = bsp_scene
-			collision_shape.set_meta("patch", metadata)
+				if collision_parent != parent:
+					parent.add_child(collision_parent, true)
+				collision_parent.add_child(collision_shape, true)
+				collision_parent.owner = bsp_scene
+				collision_shape.owner = bsp_scene
+				collision_shape.set_meta("patch", metadata)
 
 
 # get all the entities that aren't lights or worldspawn and...
@@ -1492,6 +1522,8 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			if split_mesh:
 				var small_mesh := surface_tool.commit()
 				var mesh_instance := MeshInstance3D.new()
+				
+				surface_tool.clear()
 				#mesh_instance.name = "MeshInstance3D_%s" % textures[texture_id].name
 				mesh_instance.mesh = small_mesh
 				if options.import_lights:
@@ -1509,8 +1541,9 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 					occluder_instance.owner = bsp_scene
 			else:
 				surface_tool.commit(big_mesh)
+				surface_tool.clear()
 		big_meshes.append(big_mesh)
-
+		
 	if !split_mesh:
 		# since meshes have a maximum surface size of "RenderingServer.MAX_MESH_SURFACES" we still need to split meshes along that.
 		# otherwise it's error city and incomplete mesharrays
