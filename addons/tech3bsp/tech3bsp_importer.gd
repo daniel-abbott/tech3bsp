@@ -130,7 +130,7 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"patch_detail",
-					"default_value":5
+					"default_value":4
 				},
 			]
 
