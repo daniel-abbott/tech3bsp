@@ -31,7 +31,9 @@ func angle_to_direction(a: float) -> Vector3:
 
 func _ready() -> void:
 	mesh_instance = get_node_or_null(\"MeshInstance3D\")
-	if !mesh_instance: queue_free()
+	if !mesh_instance:
+		queue_free()
+		return
 	input_ray_pickable = false
 	# could also do this as signals, \"group\" is a lot like \"team\" though...
 	if team:
