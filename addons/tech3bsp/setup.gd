@@ -14,7 +14,11 @@ var shader_globals := {
 		"type": "sampler3D",
 		"value": ""
 	},
-	"light_grid_directional": {
+	"light_grid_direct": {
+		"type": "sampler3D",
+		"value": ""
+	},
+	"light_grid_cartesian": {
 		"type": "sampler3D",
 		"value": ""
 	},

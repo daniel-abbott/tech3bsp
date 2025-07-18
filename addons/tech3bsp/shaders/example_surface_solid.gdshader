@@ -29,7 +29,7 @@ void light() {
 		// ALBEDO or vec3(1.0), or lightmap texture?
 		// using the lightmap texture here means our omni/spots should
 		// also stay bright.
-		DIFFUSE_LIGHT = lightmap * ATTENUATION;
+		DIFFUSE_LIGHT = lightmap;// * ATTENUATION;
 	} else {
 		DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR / PI;
 		// Here's a Doom 3-ish specular for no real reason.

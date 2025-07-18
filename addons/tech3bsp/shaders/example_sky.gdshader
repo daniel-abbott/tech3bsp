@@ -4,7 +4,7 @@ render_mode unshaded, cull_back, depth_draw_always;
 // not an actual q3 style sky, just a simple dome
 
 uniform sampler2D sky_texture : source_color, filter_linear, hint_default_black;
-uniform sampler2D cloud_texture : source_color, filter_linear;
+uniform sampler2D cloud_texture : source_color, filter_linear, hint_default_black;
 
 uniform float sky_scroll = 0.05;
 uniform float cloud_scroll = 0.1;

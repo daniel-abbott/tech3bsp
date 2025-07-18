@@ -32,7 +32,8 @@ var vis_data: BSPVisData
 var light_grid_normalize := Vector3.ZERO
 var light_grid_offset := Vector3.ZERO
 var light_grid_ambient: ImageTexture3D
-var light_grid_directional: ImageTexture3D
+var light_grid_direct: ImageTexture3D
+var light_grid_cartesian: ImageTexture3D
 
 var worldspawn: Dictionary
 
@@ -395,7 +396,8 @@ func clear_data() -> void:
 	light_grid_normalize = Vector3.ZERO
 	light_grid_offset = Vector3.ZERO
 	light_grid_ambient = null
-	light_grid_directional = null
+	light_grid_direct = null
+	light_grid_cartesian = null
 
 
 func split_face_groups(dict: Dictionary) -> Array[Dictionary]:
@@ -827,6 +829,17 @@ func parse_lightmaps(lightmap_lump) -> void:
 		#ResourceSaver.save(lightmaps[lm], "res://%s-%d.png" % ["lightmap", lm])
 
 
+func spherical_to_cartesian(latitude: float, longitude: float) -> Vector3:
+	var theta := deg_to_rad(longitude * 360.0 / 255.0)
+	var phi := deg_to_rad(latitude * 360.0 / 255.0)
+
+	var x := -cos(theta) * sin(phi)
+	var y := cos(phi)
+	var z := sin(theta) * sin(phi)
+
+	return Vector3(x, y, z).normalized()
+
+
 func parse_light_grid(light_grid_lump) -> void:
 	bsp_file.seek(light_grid_lump.offset)
 	var light_grid := bsp_file.get_buffer(light_grid_lump.length)
@@ -855,21 +868,26 @@ func parse_light_grid(light_grid_lump) -> void:
 	light_grid_offset = tech3_to_gd(models[0].bounds_min)
 	light_grid_normalize = (size * grid_size) / options.unit_scale
 
-	var ambient_images: Array[Image]
-	var directional_images: Array[Image]
+	var ambient_color_images: Array[Image]
+	var direct_color_images: Array[Image]
+	var cartesian_images: Array[Image]
 	
 	var data_ambient: PackedByteArray
-	data_ambient.resize(size.x * size.y * 4)
-	var data_directional: PackedByteArray
-	data_directional.resize(size.x * size.y * 4)
+	data_ambient.resize(size.x * size.y * 3)
+	var data_direct: PackedByteArray
+	data_direct.resize(size.x * size.y * 3)
+	var data_cart: PackedByteArray
+	data_cart.resize(size.x * size.y * 3)
 
 	var ambient_color: Color
-	var directional_color: Color
+	var direct_color: Color
 	var color_index := 0
 	for z in range(size.z):
 		var amb := Image.new()
 		var dir := Image.new()
+		var cart := Image.new()
 		var data_index := 0
+		var cart_index := 0
 		for y in range(size.y):
 			for x in range(size.x):
 				var lg_ambient_color := Color(light_grid[color_index], light_grid[color_index + 1], light_grid[color_index + 2])
@@ -877,45 +895,51 @@ func parse_light_grid(light_grid_lump) -> void:
 				color_index += 3
 				
 				var lg_directional_color := Color(light_grid[color_index], light_grid[color_index + 1], light_grid[color_index + 2])
-				directional_color = scale_color(lg_directional_color)
+				direct_color = scale_color(lg_directional_color)
 				color_index += 3
 				
 				data_ambient[data_index] = ambient_color.r8
-				data_directional[data_index] = directional_color.r8
+				data_direct[data_index] = direct_color.r8
 				data_index += 1
 				
 				data_ambient[data_index] = ambient_color.g8
-				data_directional[data_index] = directional_color.g8
+				data_direct[data_index] = direct_color.g8
 				data_index += 1
 				
 				data_ambient[data_index] = ambient_color.b8
-				data_directional[data_index] = directional_color.b8
+				data_direct[data_index] = direct_color.b8
 				data_index += 1
 				
-				data_ambient[data_index] = light_grid[color_index]
-				color_index += 1
-				data_directional[data_index] = light_grid[color_index]
-				color_index += 1
-				#print("Ambient: ", Color(data_ambient[index - 3], data_ambient[index - 2], data_ambient[index - 1], data_ambient[index]))
-				#print("Directional: ", Color(data_directional[index - 3], data_directional[index - 2], data_directional[index - 1], data_directional[index]))
+				var cartesian_from_spherical := spherical_to_cartesian(light_grid[color_index], light_grid[color_index + 1])
+				data_cart[cart_index] = int((cartesian_from_spherical.x * 0.5 + 0.5) * 255.0)
+				data_cart[cart_index + 1] = int((cartesian_from_spherical.y * 0.5 + 0.5) * 255.0)
+				data_cart[cart_index + 2] = int((cartesian_from_spherical.z * 0.5 + 0.5) * 255.0)
+				cart_index += 3
+				color_index += 2
 
-				data_index += 1
-		amb.set_data(size.x, size.y, false, Image.FORMAT_RGBA8, data_ambient)
-		dir.set_data(size.x, size.y, false, Image.FORMAT_RGBA8, data_directional)
+		amb.set_data(size.x, size.y, false, Image.FORMAT_RGB8, data_ambient)
+		dir.set_data(size.x, size.y, false, Image.FORMAT_RGB8, data_direct)
+		cart.set_data(size.x, size.y, false, Image.FORMAT_RGB8, data_cart)
 		# FIXME: compress_from_channels ALSO resizes the image... why?
 		# is it a BUG?
 		#amb.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGBA)
 		#dir.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGBA)
-		ambient_images.append(amb)
-		directional_images.append(dir)
+		ambient_color_images.append(amb)
+		direct_color_images.append(dir)
+		cartesian_images.append(cart)
+		
 	var ambient_tex := ImageTexture3D.new()
-	ambient_tex.create(Image.FORMAT_RGBA8, size.x, size.y, size.z, false, ambient_images)
+	ambient_tex.create(Image.FORMAT_RGB8, size.x, size.y, size.z, false, ambient_color_images)
 	#ResourceSaver.save(ambient_tex, "res://test_ambient.res")
-	var directional_tex := ImageTexture3D.new()
-	directional_tex.create(Image.FORMAT_RGBA8, size.x, size.y, size.z, false, directional_images)
+	var direct_tex := ImageTexture3D.new()
+	direct_tex.create(Image.FORMAT_RGB8, size.x, size.y, size.z, false, direct_color_images)
 	#ResourceSaver.save(directional_tex, "res://test_directional.res")
+	var cartesian_tex := ImageTexture3D.new()
+	cartesian_tex.create(Image.FORMAT_RGB8, size.x, size.y, size.z, false, cartesian_images)
+	
 	light_grid_ambient = ambient_tex
-	light_grid_directional = directional_tex
+	light_grid_direct = direct_tex
+	light_grid_cartesian = cartesian_tex
 
 
 # TODO: should we ever try to use this for anything?
@@ -1468,6 +1492,7 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
 			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
 			var translucent := false
+			var sky := false
 
 			# TODO: shaders can maybe override these flags, so these are not reliable
 			if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
@@ -1475,6 +1500,9 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			if options.remove_skies:
 				if surface_flags & SURFACE_FLAGS.SKY:
 					continue
+			if !options.remove_skies and surface_flags & SURFACE_FLAGS.SKY:
+				sky = true
+
 
 			if content_flags & CONTENT_FLAGS.FOG:
 				# handled in collision generation instead
@@ -1510,7 +1538,7 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			# FIXME: this isn't always giving individual faces, probably
 			# due to the grouping. Fine for water and stuff, unless that water
 			# has multiple visible sides :/
-			if translucent:
+			if translucent or sky:
 				var translucent_mesh := surface_tool.commit()
 				var translucent_mesh_instance := MeshInstance3D.new()
 				translucent_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1628,9 +1656,14 @@ func add_lights() -> void:
 				light_node = OmniLight3D.new()
 				light_node.omni_range = light_value * (1.0 / options.unit_scale)
 				light_node.omni_attenuation = options.light_attenuation
-				if options.light_attenuation > 0.0:
-					light_node.omni_range *= 3.0
-					light_node.light_energy *= 1.5
+				#if options.light_attenuation > 0.0:
+					#light_node.omni_range *= 3.0
+					#light_node.light_energy *= 1.5
+
+			light_node.light_volumetric_fog_energy = 0.0
+			if entity.has("fog_energy"):
+				light_node.light_volumetric_fog_energy = entity["fog_energy"].to_float()
+
 
 			light_node.position = entity.origin
 			#light_node.light_energy = light_value * options.light_brightness_scale
@@ -1660,9 +1693,9 @@ func add_world_light() -> void:
 	#directional_light.rotation_degrees = Vector3(-80.0, 45.0, 0)
 	directional_light.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 	if options.import_lightmaps:
-		directional_light.shadow_caster_mask = 4294967294
+		#directional_light.shadow_caster_mask = 4294967294
 		#directional_light.light_cull_mask = 1
-		directional_light.shadow_opacity = 0.75
+		#directional_light.shadow_opacity = 0.75
 		directional_light.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 		directional_light.directional_shadow_max_distance = 50.0
 	# with the current shader, we still need either a directional light
@@ -1757,6 +1790,8 @@ func read_bsp(source_file: String) -> Node3D:
 			_: version_string = "Unknown map version!"
 		print("%s, version: %d - %s" % [header.magic, header.version, version_string])
 	
+	bsp_scene = BSPScene.new()
+	
 	parse_entities(header.directory[LUMP_TYPE.ENTITIES])
 	parse_textures(header.directory[LUMP_TYPE.TEXTURES])
 	parse_planes(header.directory[LUMP_TYPE.PLANES])
@@ -1779,12 +1814,12 @@ func read_bsp(source_file: String) -> Node3D:
 		parse_light_grid(header.directory[LUMP_TYPE.LIGHTVOLS])
 	#parse_vis_data(header.directory[LUMP_TYPE.VISDATA])
 
-	bsp_scene = BSPScene.new()
 	bsp_scene.worldspawn = worldspawn
 	
 	if options.import_lightgrid:
 		bsp_scene.light_grid_ambient = light_grid_ambient
-		bsp_scene.light_grid_directional = light_grid_directional
+		bsp_scene.light_grid_direct = light_grid_direct
+		bsp_scene.light_grid_cartesian = light_grid_cartesian
 		bsp_scene.light_grid_normalize = light_grid_normalize
 		bsp_scene.light_grid_offset = light_grid_offset
 
