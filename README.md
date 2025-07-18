@@ -21,7 +21,8 @@ Place "addons/tech3bsp" into your Godot project (remember to include the "addons
 
 If you are interested in using idTech3 light volumes (lightgrid) for lighting dynamic objects in your game, run the "setup.gd" script, which will add the necessary global uniforms for you (or add these manually):
 - `light_grid_ambient`, sampler3D
-- `light_grid_directional`, sampler3D
+- `light_grid_direct`, sampler3D
+- `light_grid_cartesian`, sampler3D
 - `light_grid_normalize`, vec3
 - `light_grid_offset`, vec3
     - Make sure you have these globals available BEFORE doing imports: https://github.com/godotengine/godot/issues/77988
@@ -160,7 +161,7 @@ Right now this whole addon is a bit of a hack, Godot doesn't technically support
     - You can also get surface metadata off of rotated brushes by doing something like `(target.global_transform.basis.inverse() * hit_normal).normalized()` in your collision normal check (to account for the rotation).
     - Similar data can be found in patches with `get_meta("patch")`
 
-    
+
 ### Map Compilation Suggestions
 Since the addon currently doesn't actually do anything with vis data, you can skip the `vis` compilation stage for your own maps.
 
@@ -174,6 +175,10 @@ q3map2 -light -samplesize 4 -patchshadows -samples 2 -filter -bounce 8 -bouncegr
 ```
 You can also pass `-nosRGBlight` on the `-light` compile which should generate linear colorspace lightmaps, which the addon will attempt to respect. These should have greater color range, similar to Godot's own lightmapper.
 
+If you find that your lightgrid precision is abysmal, you can add the entity key `gridsize` to "worldspawn" in your map editor. It takes 3 values, the default is `64 64 128` however you can reduce this to something like `32 32 32` or even `16 16 16` for dramatically more precision, though be warned that the larger your map, the longer this will take to calculate (and the larger the resulting lightgrid texture3D's will be!).
+- The default of `64 64 128` was likely intended mainly for human-sized models moving quickly through small arenas, hence the `128` at the end (so each cell is 64 units wide, 64 units deep, and 128 units tall).
+- **ALSO** - make sure your maps are **SEALED!** Not only will unsealed maps not cull away outside geometry properly, it will make your lightgrid results look _really_ dark (to the point of appearing broken).
+
 
 ### Known Issues
 - The imported map MUST be at the center of your scene and unrotated for the lightgrid to work. May work on this to be more dynamic later.
@@ -184,17 +189,18 @@ You can also pass `-nosRGBlight` on the `-light` compile which should generate l
 - Fog brushes are translated to Godot FogVolume nodes, and for now they should be axis-aligned (no brush rotation). Remember to provide your own FogMaterials in your `materials` directory for maximum fog-ness!
 - Maps with terrain will load, however there is no special handling for idTech3 terrain shaders yet.
 
-    
+
 ### Possible Issues
 - "Return to Castle Wolfenstein" (IBSP v47) map imports _appear_ to have no issues, however this hasn't been tested extensively yet.
     - If you just want the RtCW "look" without the format, add `-wolf` to your `-light` phase of map compilation to get the same lighting falloff.
 
 
 ### TODO
-- idTech3 has a custom shader language as well, the addon currently doesn't support this (aside from all the effects that happen during the actual map compilation stage, so you should still be using idTech3 shaders for map CREATION). Medium priority.
-    - `q3map2` can generate light styles via shaders, so a shader parser would provide this as well. In practice these look pretty hacky in ioquake3 though so not sure how useful they might be...
+- idTech3 has a custom shader language as well, the addon currently doesn't support this (aside from all the effects that happen during the actual map compilation stage, so you should still be using idTech3 shaders for map CREATION). High priority.
+    - `q3map2` can generate light styles via shaders, so a shader parser would provide this as well. Very handy for more dynamic looking maps.
     - Team Arena introduced terrains and special terrain shaders, this is not a priority item however would also be cool to support.
-- Support importing BSP's from the projects "user" directory, along with custom textures (probably also pk3 support). High priority.
+- Skyboxes! Can probably just turn a skybox entity into a camera and then do some viewport and shader magic, since it will all be internal to the saved scene anyway. Medium priority (but also low hanging fruit).
+- Support importing BSP's from the projects "user" directory, along with custom textures (probably also pk3 support). Medium priority.
 - Example project in a separate repository to demonstrate usage. Medium priority.
 - Maybe some room for additional cleanup, also need to hunt for anything that needs to be freed in some form during/after the import process. Low priority unless it's actually breaking things for people, then highest priority.
 - Jolt Physics has an option to get the face index from a collision, though it increases the memory footprint, may support using this for plane metadata lookups in the future. Low priority.
