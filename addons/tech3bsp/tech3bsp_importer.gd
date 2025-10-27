@@ -64,11 +64,11 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"materials_path",
-					"default_value":"res://materials/{texture_name}.material",
+					"default_value":"materials/{texture_name}.material",
 				},
 				{
 					"name":"textures_path",
-					"default_value":"res://textures/"
+					"default_value":"textures/"
 				},
 				{
 					"name":"fallback_materials",
