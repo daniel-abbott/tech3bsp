@@ -464,25 +464,32 @@ func split_patches(patches: Array) -> Array:
 func material_from_path(texture_id: int, lightmap_id: int) -> Material:
 	var path_pattern: String = options.materials_path
 	var texture_name: String = (textures[texture_id].name)
-	var material_path := path_pattern.replace("{texture_name}", texture_name).replace("textures/", "")
+	var options_material_path := path_pattern.replace("{texture_name}", texture_name).replace("textures/", "")
 	var material: Material
+	
+	var actual_material_path := ""
 
-	if FileAccess.file_exists(material_path):
+	if options_material_path.begins_with("res://") or options_material_path.begins_with("user://"): # path is absolute, just check for the file
+		actual_material_path = options_material_path
+	else: # path is relative, build a path to check for image formats starting from the BSP's directory
+		actual_material_path = "%s/%s" % [bsp_file.get_path().get_base_dir(), options_material_path]
+
+	if FileAccess.file_exists(actual_material_path):
 		if options.import_lightmaps and lightmap_id >= 0:
 			# need to duplicate to apply lightmaps without affecting original material
-			material = load(material_path).duplicate()
+			material = load(actual_material_path).duplicate()
 		else:
 			# go ahead and just reference the material
-			material = load(material_path)
+			material = load(actual_material_path)
 	else:
 		if options.fallback_materials:
-			print("%s not found, creating fallback from texture" % material_path)
+			print("%s not found, creating fallback from texture" % actual_material_path)
 			material = material_from_texture(texture_id, lightmap_id)
 
 	# for lightmaps to work we have to make some assumptions,
 	# the shader being used must have some uniform like "lightmap_texture"
 	# so it will have to be a custom shader, this won't work for StandardMaterial3D.
-	if !lightmaps.is_empty() and material is ShaderMaterial and options.import_lightmaps and lightmap_id > 0:
+	if !lightmaps.is_empty() and material is ShaderMaterial and options.import_lightmaps and lightmap_id >= 0:
 		material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
 	return material
 
@@ -491,10 +498,15 @@ func material_from_path(texture_id: int, lightmap_id: int) -> Material:
 func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 	var material: Material
 	var face_texture: Texture2D
-	var tex_path: String = (textures[texture_id].name).replace("textures/", options.textures_path)
+	var tex_path: String = (textures[texture_id].name).replace("textures/", options.textures_path + "/" if not options.textures_path.ends_with("/") else options.textures_path)
 	
 	for ext: String in POSSIBLE_IMAGE_EXTENSIONS:
-		var possible_file := "%s.%s" % [tex_path, ext]
+		var possible_file := ""
+		if tex_path.begins_with("res://") or tex_path.begins_with("user://"): # path is absolute, just check for the file
+			possible_file = "%s.%s" % [tex_path, ext]
+		else: # path is relative, build a path to check for image formats starting from the BSP's directory
+			possible_file = "%s/%s.%s" % [bsp_file.get_path().get_base_dir(), tex_path, ext]
+		
 		if FileAccess.file_exists(possible_file):
 			face_texture = load(possible_file)
 			break
