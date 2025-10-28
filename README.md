@@ -58,11 +58,13 @@ A note on the example shaders as well, these do _not_ have `ambient_light_disabl
 - Whether to print to the console when entity remaps are not present (this can be noisy on entity-heavy BSPs if you don't have remaps set up yet). Enabled by default.
 
 **Materials Path**
-- Path for material overrides. The BSP stores textures with a pattern similar to "textures/base/wall01" - the addon will reinterpret this to import Godot materials, so the pattern "res://materials//{texture_name}.material" will load "res://materials/base/wall01.material")
+- Path for material overrides. The BSP stores textures with a pattern similar to "textures/base/wall01" - the addon will reinterpret this to import Godot materials, so the pattern "/materials/{texture_name}.material" will load "/materials/base/wall01.material")
+    - The path can be absolute (i.e. "res://materials/{texture_name}.material") or relative (i.e. "/materials/{texture_name}.material")
 
 **Textures Path**
-- Path to a directory of image files, primarily for fallback material generation purposes right now. Unlike the "Materials Path" option, this just needs to be a directory as it will test multiple image types. Defaults to "res://textures/"
+- Path to a directory of image files, primarily for fallback material generation purposes right now. Unlike the "Materials Path" option, this just needs to be a directory as it will test multiple image types. Defaults to "textures/"
     - All your file name casing should match how it appears in the BSP file.
+    - As with materials, paths can be absolute (i.e. "res://textures/") or relative (i.e. "textures/" or "/textures/")
 
 **Fallback Materials**
 - Whether to generate fallback materials when a material is missing from the material path, either using an example shader supporting lightmaps and/or vertex colors, or a StandardMaterial3D if both vertex color and lightmap imports are disabled. Default true.
