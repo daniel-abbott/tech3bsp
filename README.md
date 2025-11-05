@@ -1,5 +1,5 @@
 # tech3bsp
-An importer addon for Godot 4 to import an idTech3 BSP file as a Godot scene. Tested on `4.4.1-stable` and `4.5.beta`
+An importer addon for Godot 4 to import an idTech3 BSP file as a Godot scene. Tested on `4.4.1-stable`, `4.5.1-stable`, and `4.6.dev`
 
 Currently supports "Quake 3 Arena" and "Return to Castle Wolfenstein" BSPs, with potential plans to add Raven BSP (Jedi Outcast, etc.)
 - This importer was written from scratch based on publicly available documentation of the Quake 3 BSP file format. No GPL code from the Quake 3 source release was copied or used. Work is based primarily on the unofficial specs found at https://www.mralligator.com/q3/.
