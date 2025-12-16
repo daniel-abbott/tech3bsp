@@ -815,12 +815,7 @@ func parse_lightmaps(lightmap_lump) -> void:
 		var lightmap_bytes := bsp_file.get_buffer(DEFAULT_LIGHTMAP_LENGTH)
 		var lightmap_colors: Color
 		var pixel_size: int = DEFAULT_LIGHTMAP_SIZE
-		var base_tex: Image
-		# try to autodetect linear vs. sRGB lightmaps
-		if worldspawn.has("_q3map2_cmdline") and worldspawn["_q3map2_cmdline"].contains("-nosRGBlight"):
-			base_tex = Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGBF) # linear colorspace lightmap
-		else:
-			base_tex = Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8) # sRGB lightmap
+		var base_tex := Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8)
 
 		var l = 0
 		for y in range(pixel_size):
