@@ -444,13 +444,16 @@ func face_groups(model: BSPModel, face_types: Array[FACE_TYPE]) -> Dictionary:
 
 
 # TODO: I'm being lazy with patches right now, just split them when we hit MAX_MESH_SURFACES
-func split_patches(patches: Array) -> Array:
-	var result := []
-	var i := 0
+func split_patches(patches: Array[Dictionary]) -> Array[Array]:
+	var result: Array[Array] = []
 	
-	while i < patches.size():
-		result.append(patches.slice(i, MAX_MESH_SURFACES))
-		i += MAX_MESH_SURFACES
+	if patches.size() > MAX_MESH_SURFACES:
+		var i := 0
+		while i < patches.size():
+			result.append(patches.slice(i, i + MAX_MESH_SURFACES))
+			i += MAX_MESH_SURFACES
+	else:
+		result.append(patches)
 	
 	return result
 
@@ -1331,6 +1334,8 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			var patch_splits := split_patches(patches)
 
 			for patch_split: Array in patch_splits:
+				if mesh.get_surface_count() == MAX_MESH_SURFACES:
+					mesh = ArrayMesh.new()
 				for patch: Dictionary in patch_split:
 					#tessellate_patch_unified(patch)
 					var uvs := tessellate_patch_uvs(patch.uvs, options.patch_detail)
