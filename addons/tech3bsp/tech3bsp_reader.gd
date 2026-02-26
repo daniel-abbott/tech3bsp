@@ -1269,15 +1269,12 @@ func tessellate_patch_colors(patch: Array, divisions: int) -> PackedColorArray:
 # TODO: fuse vertices?
 func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 	var patch_faces := face_groups(bsp_model, [FACE_TYPE.PATCH])
-	# I doubt we'll ever have a patch with more than 256 faces... but just in case
 	var patch_chunks := split_face_groups(patch_faces)
-	
+
 	if patch_chunks.is_empty() or patch_faces.is_empty():
 		return
-	
+
 	for patch_chunk in patch_chunks:
-		# since the mesh is generated in the inner loop we aren't actually using chunks right now
-		# going to leave it alone unless I ever actually see a situation where a patch with >256 faces exists.
 		for patch_group: Array in patch_chunk:
 			var mesh := ArrayMesh.new()
 			var texture_id: int = patch_group[0]
@@ -1303,7 +1300,7 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			var surface_tool := SurfaceTool.new()
 			var material := material_from_path(texture_id, lightmap_id)
 			var patches: Array[Dictionary]
-			
+
 			for face: BSPFace in patch_faces[patch_group]:
 				for m in range((face.size[1] - 1) / 2):
 					var j := 2 * m
@@ -1327,77 +1324,82 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 								patch["colors"].append(bsp_vertex.color)
 						patches.append(patch)
 
-			# HACK: patches should have verts, etc. deduped to reduce potential surfaces
-			# this is just a workaround to avoid error.
-			# e.g. https://lvlworld.com/review/id:2091
-			# FIXME: WRATH maps have sooooo many patches...
+			# FIXME: This is much faster but we could still dedup verts
+			# for example, WRATH maps have sooooo many patches...
 			var patch_splits := split_patches(patches)
+
+			var uvs: PackedVector2Array = []
+			var uv2s: PackedVector2Array = []
+			var colors: PackedColorArray = []
+			var geometry: PackedVector3Array = []
 
 			for patch_split: Array in patch_splits:
 				if mesh.get_surface_count() == MAX_MESH_SURFACES:
 					mesh = ArrayMesh.new()
+
 				for patch: Dictionary in patch_split:
 					#tessellate_patch_unified(patch)
-					var uvs := tessellate_patch_uvs(patch.uvs, options.patch_detail)
-					var uv2s := tessellate_patch_uvs(patch.uv2s, options.patch_detail)
-					var colors := tessellate_patch_colors(patch.colors, options.patch_detail)
-					var geometry := tessellate_patch(patch.verts, options.patch_detail)
-					collision_faces.append_array(geometry)
+					uvs.append_array(tessellate_patch_uvs(patch.uvs, options.patch_detail))
+					uv2s.append_array(tessellate_patch_uvs(patch.uv2s, options.patch_detail))
+					colors.append_array(tessellate_patch_colors(patch.colors, options.patch_detail))
+					geometry.append_array(tessellate_patch(patch.verts, options.patch_detail))
 
-					surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-					for i in range(geometry.size()):
-						surface_tool.set_uv(uvs[i])
-						surface_tool.set_uv2(uv2s[i])
-						if options.import_vertex_colors:
-							if !options.import_lightmaps or lightmap_id < 0:
-								surface_tool.set_color(colors[i])
-						surface_tool.add_vertex(geometry[i])
+			collision_faces.append_array(geometry)
 
-					surface_tool.index()
-					surface_tool.generate_normals()
-					surface_tool.generate_tangents()
-					surface_tool.set_material(material)
-					surface_tool.commit(mesh)
-					surface_tool.clear()
+			surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+			for i in range(geometry.size()):
+				surface_tool.set_uv(uvs[i])
+				surface_tool.set_uv2(uv2s[i])
+				if options.import_vertex_colors:
+					if !options.import_lightmaps or lightmap_id < 0:
+						surface_tool.set_color(colors[i])
+				surface_tool.add_vertex(geometry[i])
 
-				# patches can be used for collisions only (OpenArena does this)
-				# however since we're generating them from triangle meshes, we still need the MESH
-				# but not necessarily the mesh INSTANCE... so just don't make one
-				if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-					var mesh_instance := MeshInstance3D.new()
-					#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
-					mesh_instance.mesh = mesh
-					parent.add_child(mesh_instance, true)
-					mesh_instance.owner = bsp_scene
-				
-				# move along if there aren't any collisions to generate.
-				if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
-					continue
-				
-				var collision_parent # can be a liquid scene
-				var concave_polygon_shape := ConcavePolygonShape3D.new()
-				var collision_shape := CollisionShape3D.new()
-				collision_shape.shape = concave_polygon_shape
-				concave_polygon_shape.set_faces(collision_faces)
-				
-				if content_flags & CONTENT_FLAGS.WATER:
-					collision_parent = options.water_scene.instantiate()
-				elif content_flags & CONTENT_FLAGS.SLIME:
-					collision_parent = options.slime_scene.instantiate()
-				elif content_flags & CONTENT_FLAGS.LAVA:
-					collision_parent = options.lava_scene.instantiate()
+			surface_tool.index()
+			surface_tool.generate_normals()
+			surface_tool.generate_tangents()
+			surface_tool.set_material(material)
+			surface_tool.commit(mesh)
+			surface_tool.clear()
+
+			# patches can be used for collisions only (OpenArena does this)
+			# however since we're generating them from triangle meshes, we still need the MESH
+			# but not necessarily the mesh INSTANCE... so just don't make one
+			if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+				var mesh_instance := MeshInstance3D.new()
+				#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
+				mesh_instance.mesh = mesh
+				parent.add_child(mesh_instance, true)
+				mesh_instance.owner = bsp_scene
+
+			# move along if there aren't any collisions to generate.
+			if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
+				continue
+
+			var collision_parent # can be a liquid scene
+			var concave_polygon_shape := ConcavePolygonShape3D.new()
+			var collision_shape := CollisionShape3D.new()
+			collision_shape.shape = concave_polygon_shape
+			concave_polygon_shape.set_faces(collision_faces)
+
+			if content_flags & CONTENT_FLAGS.WATER:
+				collision_parent = options.water_scene.instantiate()
+			elif content_flags & CONTENT_FLAGS.SLIME:
+				collision_parent = options.slime_scene.instantiate()
+			elif content_flags & CONTENT_FLAGS.LAVA:
+				collision_parent = options.lava_scene.instantiate()
+			else:
+				if parent is CollisionObject3D:
+					collision_parent = parent
 				else:
-					if parent is CollisionObject3D:
-						collision_parent = parent
-					else:
-						collision_parent = StaticBody3D.new()
+					collision_parent = StaticBody3D.new()
 
-				if collision_parent != parent:
-					parent.add_child(collision_parent, true)
-				collision_parent.add_child(collision_shape, true)
-				collision_parent.owner = bsp_scene
-				collision_shape.owner = bsp_scene
-				collision_shape.set_meta("patch", metadata)
+			if collision_parent != parent:
+				parent.add_child(collision_parent, true)
+			collision_parent.add_child(collision_shape, true)
+			collision_parent.owner = bsp_scene
+			collision_shape.owner = bsp_scene
+			collision_shape.set_meta("patch", metadata)
 
 
 # get all the entities that aren't lights or worldspawn and...
