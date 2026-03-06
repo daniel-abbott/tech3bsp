@@ -1576,7 +1576,7 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 				
 				parent.add_child(mesh_instance, true)
 				mesh_instance.owner = bsp_scene
-				if options.occlusion_culling:
+				if options.occlusion_culling and bsp_model == models[0]:
 					var occluder_instance := OccluderInstance3D.new()
 					occluder_instance.occluder = generate_occlusion_geometry(small_mesh)
 					parent.add_child(occluder_instance, true)
@@ -1597,7 +1597,7 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 				mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 			parent.add_child(mesh_instance, true)
 			mesh_instance.owner = bsp_scene
-			if options.occlusion_culling:
+			if options.occlusion_culling and bsp_model == models[0]:
 				var occluder_instance := OccluderInstance3D.new()
 				occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
 				parent.add_child(occluder_instance, true)
