@@ -1576,11 +1576,11 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 				
 				parent.add_child(mesh_instance, true)
 				mesh_instance.owner = bsp_scene
-				if options.occlusion_culling and bsp_model == models[0]:
-					var occluder_instance := OccluderInstance3D.new()
-					occluder_instance.occluder = generate_occlusion_geometry(small_mesh)
-					parent.add_child(occluder_instance, true)
-					occluder_instance.owner = bsp_scene
+				# if options.occlusion_culling and bsp_model == models[0]:
+				# 	var occluder_instance := OccluderInstance3D.new()
+				# 	occluder_instance.occluder = generate_occlusion_geometry(small_mesh)
+				# 	parent.add_child(occluder_instance, true)
+				# 	occluder_instance.owner = bsp_scene
 			else:
 				surface_tool.commit(big_mesh)
 				surface_tool.clear()
@@ -1597,11 +1597,11 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 				mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 			parent.add_child(mesh_instance, true)
 			mesh_instance.owner = bsp_scene
-			if options.occlusion_culling and bsp_model == models[0]:
-				var occluder_instance := OccluderInstance3D.new()
-				occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
-				parent.add_child(occluder_instance, true)
-				occluder_instance.owner = bsp_scene
+			# if options.occlusion_culling and bsp_model == models[0]:
+			# 	var occluder_instance := OccluderInstance3D.new()
+			# 	occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
+			# 	parent.add_child(occluder_instance, true)
+			# 	occluder_instance.owner = bsp_scene
 #
 			# if the user is NOT importing lightmaps and NOT splitting the mesh
 			# let's make it possible to use Godot's lightmapper.
@@ -1778,6 +1778,91 @@ func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
 		#test.position = position
 #	print(billboards.size())
 
+func add_occluder() -> void:
+	var ws: BSPModel = models[0]
+
+	var occluder_vertices := PackedVector3Array()
+	var occluder_indices := PackedInt32Array()
+
+	var offset := 0
+
+	for f in range(ws.face, ws.face + ws.num_faces):
+		var face: BSPFace = faces[f]
+
+		if face.type & FACE_TYPE.BILLBOARD:
+			continue
+
+		if textures[face.texture_id].flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.SKIP | SURFACE_FLAGS.HINT):
+			continue
+
+		if textures[face.texture_id].content_flags & (CONTENT_FLAGS.TRANSLUCENT | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+			continue
+
+		if face.type & FACE_TYPE.PATCH:
+			var previous_size := occluder_vertices.size()
+
+			var w := face.size[0]
+			var h := face.size[1]
+
+			for py in range(0, h - 2, 2):
+				for px in range(0, w - 2, 2):
+					var ctrl := []
+
+					for j in range(3):
+						for i in range(3):
+							var idx := (py + j) * w + (px + i)
+							var vert := vertices[face.start_vert_index + idx].position
+							ctrl.append(vert)
+
+					var grid := []
+
+					for v_step in range(3):
+						var v := float(v_step) * 0.5
+
+						for u_step in range(3):
+							var u := float(u_step) * 0.5
+							grid.append(evaluate_patch(ctrl, u, v))
+
+					for y in range(2):
+						for x in range(2):
+							var i0 := y * 3 + x
+							var i1 := i0 + 1
+							var i2 := i0 + 3
+							var i3 := i2 + 1
+
+							var base := occluder_vertices.size()
+
+							occluder_vertices.append_array([
+								grid[i0],
+								grid[i1],
+								grid[i3],
+								grid[i2]
+							])
+
+							occluder_indices.append_array([
+								base + 0, base + 1, base + 2,
+								base + 0, base + 2, base + 3
+							])
+
+			offset += occluder_vertices.size() - previous_size
+		else:
+			for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
+				occluder_vertices.append(vertices[v].position)
+
+			for i in range(face.start_index, face.start_index + face.num_indices):
+				occluder_indices.append(indices[i] + offset)
+
+			offset += face.num_verts
+
+	var occluder := ArrayOccluder3D.new()
+	occluder.set_arrays(occluder_vertices, occluder_indices)
+
+	var instance := OccluderInstance3D.new()
+	instance.occluder = occluder
+
+	bsp_scene.add_child(instance, true)
+	instance.owner = bsp_scene
+
 
 func read_bsp(source_file: String) -> Node3D:
 	clear_data() # not sure this is needed
@@ -1837,6 +1922,8 @@ func read_bsp(source_file: String) -> Node3D:
 		bsp_scene.light_grid_normalize = light_grid_normalize
 		bsp_scene.light_grid_offset = light_grid_offset
 
+	if options.occlusion_culling:
+		add_occluder()
 	add_brush_meshes(models[0], bsp_scene)
 	add_brush_collisions(models[0], bsp_scene)
 	add_patches(models[0], bsp_scene)
