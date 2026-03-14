@@ -1615,21 +1615,21 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 
 # TODO: needs to not incorporate transparent and detail geometry, etc.
 # maybe we do this during the mesh construction phase to skip some geometry?
-func generate_occlusion_geometry(mesh: Mesh) -> ArrayOccluder3D:
-		var occluder_vertices: PackedVector3Array
-		var occluder_indices: PackedInt32Array
-		for i in range(mesh.get_surface_count()):
-			var offset := occluder_vertices.size()
-			var arrays := mesh.surface_get_arrays(i)
-			occluder_vertices.append_array(arrays[ArrayMesh.ARRAY_VERTEX])
-			if arrays[ArrayMesh.ARRAY_INDEX] == null:
-				occluder_indices.append_array(range(offset, offset + arrays[ArrayMesh.ARRAY_VERTEX].size()))
-			else:
-				for index in arrays[ArrayMesh.ARRAY_INDEX]:
-					occluder_indices.append(index + offset)
-		var array_occluder := ArrayOccluder3D.new()
-		array_occluder.set_arrays(occluder_vertices, occluder_indices)
-		return array_occluder
+# func generate_occlusion_geometry(mesh: Mesh) -> ArrayOccluder3D:
+# 		var occluder_vertices: PackedVector3Array
+# 		var occluder_indices: PackedInt32Array
+# 		for i in range(mesh.get_surface_count()):
+# 			var offset := occluder_vertices.size()
+# 			var arrays := mesh.surface_get_arrays(i)
+# 			occluder_vertices.append_array(arrays[ArrayMesh.ARRAY_VERTEX])
+# 			if arrays[ArrayMesh.ARRAY_INDEX] == null:
+# 				occluder_indices.append_array(range(offset, offset + arrays[ArrayMesh.ARRAY_VERTEX].size()))
+# 			else:
+# 				for index in arrays[ArrayMesh.ARRAY_INDEX]:
+# 					occluder_indices.append(index + offset)
+# 		var array_occluder := ArrayOccluder3D.new()
+# 		array_occluder.set_arrays(occluder_vertices, occluder_indices)
+# 		return array_occluder
 
 
 # if you're experimenting with Q3A maps, they do come with light ents
@@ -1799,6 +1799,9 @@ func add_occluder() -> void:
 			continue
 
 		if textures[face.texture_id].content_flags & (CONTENT_FLAGS.TRANSLUCENT | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+			continue
+
+		if textures[face.texture_id].flags & SURFACE_FLAGS.SKY and options.remove_skies:
 			continue
 
 		if face.type & FACE_TYPE.PATCH:
