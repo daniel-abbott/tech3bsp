@@ -1358,6 +1358,7 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			surface_tool.index()
 			surface_tool.generate_normals()
 			surface_tool.generate_tangents()
+			surface_tool.optimize_indices_for_cache()
 			surface_tool.set_material(material)
 			surface_tool.commit(mesh)
 			surface_tool.clear()
@@ -1548,6 +1549,8 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 					surface_tool.add_index(indices[i] + offset)
 
 				offset += face.num_verts
+
+			surface_tool.optimize_indices_for_cache()
 			# give each transparent face its own mesh for sorting purposes.
 			# FIXME: this isn't always giving individual faces, probably
 			# due to the grouping. Fine for water and stuff, unless that water
