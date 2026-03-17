@@ -37,6 +37,10 @@ var light_grid_cartesian: ImageTexture3D
 
 var worldspawn: Dictionary
 
+var lightmap_atlas: ImageTexture
+var lightmap_columns := 0
+var lightmap_rows := 0
+
 # using the idtech3 lump names here
 enum LUMP_TYPE {
 	ENTITIES = 0,
@@ -432,7 +436,11 @@ func face_groups(model: BSPModel, face_types: Array[FACE_TYPE]) -> Dictionary:
 		
 		var key: Array
 		if options.import_lightmaps:
-			key = [face.texture_id, face.lightmap_id]
+			if face.lightmap_id >= 0:
+				key = [face.texture_id, 0]
+			else:
+				key = [face.texture_id, face.lightmap_id]
+			
 		else:
 			key = [face.texture_id, -1]
 		
@@ -486,14 +494,14 @@ func material_from_path(texture_id: int, lightmap_id: int) -> Material:
 			material = load(actual_material_path)
 	else:
 		if options.fallback_materials:
-			print("%s not found, creating fallback from texture" % actual_material_path)
+			#print("%s not found, creating fallback from texture" % actual_material_path)
 			material = material_from_texture(texture_id, lightmap_id)
 
 	# for lightmaps to work we have to make some assumptions,
 	# the shader being used must have some uniform like "lightmap_texture"
 	# so it will have to be a custom shader, this won't work for StandardMaterial3D.
-	if !lightmaps.is_empty() and material is ShaderMaterial and options.import_lightmaps and lightmap_id >= 0:
-		material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
+	if material is ShaderMaterial and options.import_lightmaps and lightmap_id >= 0:
+		material.set_shader_parameter("lightmap_texture", lightmap_atlas)
 	return material
 
 
@@ -541,14 +549,16 @@ func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 	
 	# this check is probably unnecessary at this point, but just in case
 	if material is ShaderMaterial:
-		if !lightmaps.is_empty() and options.import_lightmaps and lightmap_id >= 0:
+		if options.import_lightmaps and lightmap_id >= 0:
+			material.set_shader_parameter("lightmap_texture", lightmap_atlas)
+		#if !lightmaps.is_empty() and options.import_lightmaps and lightmap_id >= 0:
 			# Doing it as another pass loses us ~500 FPS
 			# TODO: make it optional and put that caveat into readme
 			#var lightmap_material := ShaderMaterial.new()
 			#lightmap_material.shader = load("res://addons/tech3bsp/shaders/lightmap.gdshader")
 			#lightmap_material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
 			#material.next_pass = lightmap_material
-			material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
+			#material.set_shader_parameter("lightmap_texture", lightmaps[lightmap_id])
 	
 		material.set_shader_parameter("albedo_texture", face_texture)
 	
@@ -814,26 +824,59 @@ func parse_lightmaps(lightmap_lump) -> void:
 		return
 	
 	print("internal lightmaps: ", count)
+	
+	lightmap_columns = int(ceil(sqrt(count)))
+	lightmap_rows = int(ceil(float(count) / lightmap_columns))
+	
+	var atlas_width = lightmap_columns * DEFAULT_LIGHTMAP_SIZE
+	var atlas_height = lightmap_rows * DEFAULT_LIGHTMAP_SIZE
+	
+	var lightmap_atlas_image := Image.create_empty(atlas_width, atlas_height, false, Image.FORMAT_RGB8)
+
 	for i in range(count):
 		var lightmap_bytes := bsp_file.get_buffer(DEFAULT_LIGHTMAP_LENGTH)
 		var lightmap_colors: Color
-		var pixel_size: int = DEFAULT_LIGHTMAP_SIZE
-		var base_tex := Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8)
-
-		var l = 0
-		for y in range(pixel_size):
-			for x in range(pixel_size):
+		var img := Image.create_empty(DEFAULT_LIGHTMAP_SIZE, DEFAULT_LIGHTMAP_SIZE, false, Image.FORMAT_RGB8)
+		var l := 0
+		
+		for y in range(DEFAULT_LIGHTMAP_SIZE):
+			for x in range(DEFAULT_LIGHTMAP_SIZE):
 				lightmap_colors = scale_color(Color(lightmap_bytes[l], lightmap_bytes[l + 1], lightmap_bytes[l + 2]))
-				base_tex.set_pixel(x, y, lightmap_colors)
+				img.set_pixel(x, y, lightmap_colors)
 				l += 3
 		
-		base_tex.generate_mipmaps()
-		# Possible BUG! compress_from_channels resizes the image for some reason
-		# in lightmaps this leads to big gross seams
-		# and in lightgrids the scale is wrong
-		#base_tex.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
-		var tex = ImageTexture.create_from_image(base_tex)
-		lightmaps.append(tex)
+		var col = i % lightmap_columns
+		var row = i / lightmap_columns
+		var dst := Vector2i(col * DEFAULT_LIGHTMAP_SIZE, row * DEFAULT_LIGHTMAP_SIZE)
+		
+		lightmap_atlas_image.blit_rect(
+			img,
+			Rect2i(0, 0, DEFAULT_LIGHTMAP_SIZE, DEFAULT_LIGHTMAP_SIZE),
+			dst
+		)
+		
+		#img.generate_mipmaps()
+	#lightmap_atlas.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
+	lightmap_atlas = ImageTexture.create_from_image(lightmap_atlas_image)
+	#print(error_string(ResourceSaver.save(lightmap_data.lightmap, "res://lightmap1.png")))
+		
+		#var pixel_size: int = DEFAULT_LIGHTMAP_SIZE
+		#var base_tex := Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8)
+#
+		#var l = 0
+		#for y in range(pixel_size):
+			#for x in range(pixel_size):
+				#lightmap_colors = scale_color(Color(lightmap_bytes[l], lightmap_bytes[l + 1], lightmap_bytes[l + 2]))
+				#base_tex.set_pixel(x, y, lightmap_colors)
+				#l += 3
+		#
+		#base_tex.generate_mipmaps()
+		## Possible BUG! compress_from_channels resizes the image for some reason
+		## in lightmaps this leads to big gross seams
+		## and in lightgrids the scale is wrong
+		##base_tex.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
+		#var tex = ImageTexture.create_from_image(base_tex)
+		#lightmaps.append(tex)
 		# TODO: optional internal lightmap image saving?
 	#for lm in range(lightmaps.size()):
 		#ResourceSaver.save(lightmaps[lm], "res://%s-%d.png" % ["lightmap", lm])
@@ -1302,6 +1345,11 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			var patches: Array[Dictionary]
 
 			for face: BSPFace in patch_faces[patch_group]:
+				var lm_col := 0
+				var lm_row := 0
+				if options.import_lightmaps:
+					lm_col = face.lightmap_id % lightmap_columns
+					lm_row = face.lightmap_id / lightmap_columns
 				for m in range((face.size[1] - 1) / 2):
 					var j := 2 * m
 					for n in range((face.size[0] - 1) / 2):
@@ -1320,7 +1368,10 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 
 								patch["verts"].append(bsp_vertex.position)
 								patch["uvs"].append(bsp_vertex.uv)
-								patch["uv2s"].append(bsp_vertex.uv2)
+								var uv2 = bsp_vertex.uv2
+								uv2.x = (uv2.x + lm_col) / lightmap_columns
+								uv2.y = (uv2.y + lm_row) / lightmap_rows
+								patch["uv2s"].append(uv2)
 								patch["colors"].append(bsp_vertex.color)
 						patches.append(patch)
 
@@ -1478,6 +1529,79 @@ func add_entities() -> void:
 			add_patches(models[model_index], entity_scene)
 
 
+func append_surface(surfaces, face: BSPFace) -> void:
+	var base: int = surfaces.vertices.size()
+
+	var lm_col := 0
+	var lm_row := 0
+	if options.import_lightmaps:
+		lm_col = face.lightmap_id % lightmap_columns
+		lm_row = face.lightmap_id / lightmap_columns
+
+	for i in range(face.num_verts):
+		var v := vertices[face.start_vert_index + i]
+		
+		surfaces.vertices.append(v.position)
+		surfaces.normals.append(v.normal)
+		surfaces.uv.append(v.uv)
+		
+		var uv2 = v.uv2
+		uv2.x = (uv2.x + lm_col) / lightmap_columns
+		uv2.y = (uv2.y + lm_row) / lightmap_rows
+		
+		surfaces.uv2.append(uv2)
+	
+	for i in range(face.num_indices):
+		surfaces.indices.append(base + indices[face.start_index + i])
+
+# TODO: with the new lightmap atlas, no need for all the special grouping
+func add_model(bsp_model: BSPModel, parent: Node) -> void:
+	#var meshes: Array[ArrayMesh]
+	var surfaces := {}
+	
+	var offset := 0
+	
+	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		var face := faces[f]
+		
+		if face.type & (FACE_TYPE.BILLBOARD | FACE_TYPE.PATCH):
+			continue
+		
+		var id := face.texture_id
+		
+		if not surfaces.has(id):
+			surfaces[id] = {
+				"vertices": PackedVector3Array(),
+				"normals": PackedVector3Array(),
+				"uv": PackedVector2Array(),
+				"uv2": PackedVector2Array(),
+				"indices": PackedInt32Array()
+			}
+
+		append_surface(surfaces[id], face)
+
+	var mesh := ArrayMesh.new()
+
+	for key in surfaces.keys():
+		var surface = surfaces[key]
+
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+
+		arrays[Mesh.ARRAY_VERTEX] = surface.vertices
+		arrays[Mesh.ARRAY_NORMAL] = surface.normals
+		arrays[Mesh.ARRAY_TEX_UV] = surface.uv
+		arrays[Mesh.ARRAY_TEX_UV2] = surface.uv2
+		arrays[Mesh.ARRAY_INDEX] = surface.indices
+
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	bsp_scene.add_child(mi)
+	mi.owner = bsp_scene
+
+
 func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 	var brush_faces := face_groups(bsp_model, [FACE_TYPE.POLYGON, FACE_TYPE.MESH])
 	# just in case we end up with more than 256 surfaces, or whatever MAX_MESH_SURFACES is.
@@ -1518,7 +1642,6 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			if !options.remove_skies and surface_flags & SURFACE_FLAGS.SKY:
 				sky = true
 
-
 			if content_flags & CONTENT_FLAGS.FOG:
 				# handled in collision generation instead
 				# TODO: compatibility fallback fog effect?
@@ -1536,10 +1659,18 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			var offset := 0
 
 			for face: BSPFace in brush_faces[brush_face]:
+				var lm_col := 0
+				var lm_row := 0
+				if options.import_lightmaps:
+					lm_col = face.lightmap_id % lightmap_columns
+					lm_row = face.lightmap_id / lightmap_columns
 				for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
 					surface_tool.set_normal(vertices[v].normal)
 					surface_tool.set_uv(vertices[v].uv)
-					surface_tool.set_uv2(vertices[v].uv2)
+					var uv2 = vertices[v].uv2
+					uv2.x = (uv2.x + lm_col) / lightmap_columns
+					uv2.y = (uv2.y + lm_row) / lightmap_rows
+					surface_tool.set_uv2(uv2)
 					if options.import_vertex_colors:
 						if !options.import_lightmaps or lightmap_id < 0:
 							surface_tool.set_color(vertices[v].color)
@@ -1930,6 +2061,8 @@ func read_bsp(source_file: String) -> Node3D:
 
 	if options.occlusion_culling:
 		add_occluder()
+
+	#add_model(models[0], bsp_scene)
 	add_brush_meshes(models[0], bsp_scene)
 	add_brush_collisions(models[0], bsp_scene)
 	add_patches(models[0], bsp_scene)
