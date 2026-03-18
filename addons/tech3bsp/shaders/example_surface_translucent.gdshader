@@ -4,7 +4,7 @@ render_mode blend_mix, depth_draw_opaque, depth_prepass_alpha, cull_disabled, di
 uniform sampler2D albedo_texture : source_color, hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
 // source_color here can crush out the colors for RGB8 lightmaps
 uniform sampler2D lightmap_texture : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform vec4 color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float alpha = 1.0;
 
 // sRGB compensation, not currently in use
 //void vertex() {
@@ -14,7 +14,7 @@ uniform vec4 color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 void fragment() {
 	vec4 albedo = texture(albedo_texture, UV);
 	ALBEDO = albedo.rgb * COLOR.rgb;
-	ALPHA = 0.4;
+	ALPHA = alpha * albedo.a;
 }
 
 // another hack, we can get entity shadows by having a directional light
