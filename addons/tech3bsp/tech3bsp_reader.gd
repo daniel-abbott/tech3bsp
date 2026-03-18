@@ -26,7 +26,7 @@ var vertices: Array[BSPVertex]
 var indices: Array[int] # meshverts in BSP terms
 var effects: Array[BSPEffect] # seems to be only volumetric fog?
 var faces: Array[BSPFace]
-var lightmaps: Array[Texture]
+var external_lightmaps: Array[Texture]
 var vis_data: BSPVisData
 
 var light_grid_normalize := Vector3.ZERO
@@ -59,7 +59,8 @@ enum LUMP_TYPE {
 	FACES,
 	LIGHTMAPS,
 	LIGHTVOLS, # 3D volumetric light grid for dynamic objects
-	VISDATA
+	VISDATA,
+	#whatever Raven thing goes here
 }
 
 enum FACE_TYPE {
@@ -395,7 +396,7 @@ func clear_data() -> void:
 	indices.clear()
 	effects.clear()
 	faces.clear()
-	lightmaps.clear()
+	external_lightmaps.clear()
 	vis_data = null
 	light_grid_normalize = Vector3.ZERO
 	light_grid_offset = Vector3.ZERO
@@ -501,7 +502,10 @@ func material_from_path(texture_id: int, lightmap_id: int) -> Material:
 	# the shader being used must have some uniform like "lightmap_texture"
 	# so it will have to be a custom shader, this won't work for StandardMaterial3D.
 	if material is ShaderMaterial and options.import_lightmaps and lightmap_id >= 0:
-		material.set_shader_parameter("lightmap_texture", lightmap_atlas)
+		if external_lightmaps.is_empty():
+			material.set_shader_parameter("lightmap_texture", lightmap_atlas)
+		else:
+			material.set_shader_parameter("lightmap_texture", external_lightmaps[lightmap_id])
 	return material
 
 
@@ -550,7 +554,10 @@ func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 	# this check is probably unnecessary at this point, but just in case
 	if material is ShaderMaterial:
 		if options.import_lightmaps and lightmap_id >= 0:
-			material.set_shader_parameter("lightmap_texture", lightmap_atlas)
+			if external_lightmaps.is_empty():
+				material.set_shader_parameter("lightmap_texture", lightmap_atlas)
+			else:
+				material.set_shader_parameter("lightmap_texture", external_lightmaps[lightmap_id])
 		#if !lightmaps.is_empty() and options.import_lightmaps and lightmap_id >= 0:
 			# Doing it as another pass loses us ~500 FPS
 			# TODO: make it optional and put that caveat into readme
@@ -813,14 +820,14 @@ func parse_lightmaps(lightmap_lump) -> void:
 					entry = dir.get_next()
 					continue
 				var ext_lm_image: CompressedTexture2D = load("%s/%s" % [bsp_path, entry])
-				lightmaps.append(ext_lm_image)
+				external_lightmaps.append(ext_lm_image)
 				entry = dir.get_next()
 		else:
 			print("No external or internal lightmaps found, abandoning lightmap import.")
 			return
 
-		lightmaps.reverse() # gotta flip the order apparently? TODO: test on more large lightmaps!
-		print("external lightmaps: ",  lightmaps.size())
+		external_lightmaps.reverse() # gotta flip the order apparently? TODO: test on more large lightmaps!
+		print("external lightmaps: ",  external_lightmaps.size())
 		return
 	
 	print("internal lightmaps: ", count)
@@ -1347,7 +1354,7 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 			for face: BSPFace in patch_faces[patch_group]:
 				var lm_col := 0
 				var lm_row := 0
-				if options.import_lightmaps:
+				if options.import_lightmaps and external_lightmaps.is_empty():
 					lm_col = face.lightmap_id % lightmap_columns
 					lm_row = face.lightmap_id / lightmap_columns
 				for m in range((face.size[1] - 1) / 2):
@@ -1368,10 +1375,13 @@ func add_patches(bsp_model: BSPModel, parent: Node) -> void:
 
 								patch["verts"].append(bsp_vertex.position)
 								patch["uvs"].append(bsp_vertex.uv)
-								var uv2 = bsp_vertex.uv2
-								uv2.x = (uv2.x + lm_col) / lightmap_columns
-								uv2.y = (uv2.y + lm_row) / lightmap_rows
-								patch["uv2s"].append(uv2)
+								if external_lightmaps.is_empty():
+									var uv2 := bsp_vertex.uv2
+									uv2.x = (uv2.x + lm_col) / lightmap_columns
+									uv2.y = (uv2.y + lm_row) / lightmap_rows
+									patch["uv2s"].append(uv2)
+								else:
+									patch["uv2s"].append(bsp_vertex.uv2)
 								patch["colors"].append(bsp_vertex.color)
 						patches.append(patch)
 
@@ -1661,16 +1671,21 @@ func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
 			for face: BSPFace in brush_faces[brush_face]:
 				var lm_col := 0
 				var lm_row := 0
-				if options.import_lightmaps:
+				if options.import_lightmaps and external_lightmaps.is_empty():
 					lm_col = face.lightmap_id % lightmap_columns
 					lm_row = face.lightmap_id / lightmap_columns
 				for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
 					surface_tool.set_normal(vertices[v].normal)
 					surface_tool.set_uv(vertices[v].uv)
-					var uv2 = vertices[v].uv2
-					uv2.x = (uv2.x + lm_col) / lightmap_columns
-					uv2.y = (uv2.y + lm_row) / lightmap_rows
-					surface_tool.set_uv2(uv2)
+					
+					if external_lightmaps.is_empty():
+						var uv2 = vertices[v].uv2
+						uv2.x = (uv2.x + lm_col) / lightmap_columns
+						uv2.y = (uv2.y + lm_row) / lightmap_rows
+						surface_tool.set_uv2(uv2)
+					else:
+						surface_tool.set_uv2(vertices[v].uv2)
+						
 					if options.import_vertex_colors:
 						if !options.import_lightmaps or lightmap_id < 0:
 							surface_tool.set_color(vertices[v].color)
