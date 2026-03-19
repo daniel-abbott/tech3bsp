@@ -1000,7 +1000,8 @@ func build_fog_volume(points: PackedVector3Array, texture_id: int) -> FogVolume:
 	
 	return fog
 
-
+# TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
+# clean this thing up!
 func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	var collision_body: CollisionObject3D
 
@@ -1041,6 +1042,12 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	for key in patches_to_tessellate:
 		var face_list: Array = patches_to_tessellate[key]
 		var f: BSPFace = face_list[0] # all the faces in a patch should be the same data
+		var texture_name := textures[f.texture_id].name
+		var flags := textures[f.texture_id].flags
+		var content_flags := textures[f.texture_id].content_flags
+		
+		if not content_flags & (CONTENT_FLAGS.SOLID | CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+			continue
 		
 		var patch := {
 			"meta": {
@@ -1092,9 +1099,8 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 							patch.geometry.append_array([
 								v0, v1, v3,
 								v0, v3, v2,
-								#v0, v2, v1, 
-								#v1, v2, v3
 							])
+		
 		if not patch.geometry.is_empty():
 			tessellated_patches.append(patch)
 
@@ -1194,6 +1200,30 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			if p.geometry.is_empty():
 				continue
 
+			var collision_parent = collision_body
+			
+			var flags: SURFACE_FLAGS = p.meta.flags
+			var content_flags: CONTENT_FLAGS = p.meta.content_flags
+
+			if content_flags & CONTENT_FLAGS.WATER:
+				if !water_body:
+					water_body = options.water_scene.instantiate()
+					parent.add_child(water_body, true)
+					water_body.owner = bsp_scene
+				collision_parent = water_body
+			if content_flags & CONTENT_FLAGS.SLIME:
+				if !slime_body:
+					slime_body = options.slime_scene.instantiate()
+					parent.add_child(slime_body, true)
+					slime_body.owner = bsp_scene
+				collision_parent = slime_body
+			if content_flags & CONTENT_FLAGS.LAVA:
+				if !lava_body:
+					lava_body = options.lava_scene.instantiate()
+					parent.add_child(lava_body, true)
+					lava_body.owner = bsp_scene
+				collision_parent = lava_body
+
 			var concave_polygon_shape := ConcavePolygonShape3D.new()
 			var collider := CollisionShape3D.new()
 			
@@ -1201,7 +1231,7 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collider.shape = concave_polygon_shape
 			collider.set_meta("patch", p.meta)
 			
-			collision_body.add_child(collider, true)
+			collision_parent.add_child(collider, true)
 			collider.owner = bsp_scene
 
 
@@ -1276,11 +1306,9 @@ func add_entities() -> void:
 
 			add_bsp_model(models[model_index], entity_scene)
 			add_collisions(models[model_index], entity_scene)
-			#add_brush_collisions(models[model_index], entity_scene)
 
 
 ### New patch functions ###
-
 # unified bezier processer
 func bezier3(a: Variant, b: Variant, c: Variant, t: float) -> Variant:
 	var it: float = 1.0 - t
@@ -1460,7 +1488,7 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 		var st: SurfaceTool = surfaces[id].st
 		var transparent: bool = surfaces[id].transparent
 
-		#st.index()
+		st.index()
 		st.optimize_indices_for_cache()
 		#st.generate_normals()
 		#st.generate_tangents()
@@ -1482,21 +1510,6 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 		st.clear()
 
 	create_bsp_mesh(current_mesh, parent)
-
-### Transparent surfaces mesh section (for proper sorting) ###
-	#for id in transparent_surfaces:
-		#var st: SurfaceTool = transparent_surfaces[id].st
-		#
-		##st.index()
-		#st.optimize_indices_for_cache()
-		##st.generate_normals()
-		##st.generate_tangents()
-		#
-		## transparent meshes are always split by surface for sorting
-		#var mesh := st.commit()
-		#st.clear()
-		#
-		#create_bsp_mesh(mesh, parent)
 
 
 # if you're experimenting with Q3A maps, they do come with light ents
@@ -1801,7 +1814,6 @@ func read_bsp(source_file: String) -> Node3D:
 
 	add_bsp_model(models[0], bsp_scene)
 	add_collisions(models[0], bsp_scene)
-	#add_brush_collisions(models[0], bsp_scene)
 	add_entities()
 	if options.import_lights:
 		add_lights()
