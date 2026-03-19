@@ -1005,11 +1005,11 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	var collision_body: CollisionObject3D
 
 	var collision_brushes: Array[BSPBrush] # brushes
-	var collision_patches := {}#PackedVector3Array() # patches as vertices
+	var patches_to_tessellate := {} # patch vertices, for de-duping
+	var tessellated_patches := []
 	
 	# TODO: maybe we can get away with reducing this...
 	var patch_collision_subdivisions: float = options.patch_detail
-	var stride := patch_collision_subdivisions + 1
 	
 	var water_body: Node3D
 	var slime_body: Node3D
@@ -1028,59 +1028,77 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		collision_brushes.append(brushes[i])
 
 	# get patches for this model (if any)
-	# first, de-dup surfaces (because we want one shape per surface)
-	#for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
-		#var face := faces[f]
-		#
-		#if not collision_patches.has(face.texture_id):
-			#collision_patches[face.texture_id] = face
-	#
-	#for face: BSPFace in collision_patches:
-		#if face.type & FACE_TYPE.PATCH:
-			#var width := face.size[0]
-			#var height := face.size[1]
-			#
-			#for py in range(0, height - 1, 2):
-				#for px in range(0, width - 1, 2):
-					#var ctrl := []
-					#var grid := []
-					#
-					#for j in range(3):
-						#for i in range(3):
-							#var idx := face.start_vert_index + (py + j) * width + (px + i)
-							#ctrl.append(vertices[idx])
-							#
-					#for y in range(patch_collision_subdivisions + 1):
-						#var ty := float(y) / patch_collision_subdivisions
-						#var row := []
-						#
-						#for x in range(patch_collision_subdivisions + 1):
-							#var tx := float(x) / patch_collision_subdivisions
-							#
-							#var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
-							#var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
-							#var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
-#
-							#var pos = bezier3(r0, r1, r2, ty)
-#
-							#row.append(pos)
-#
-						#grid.append(row)
-						#
-					#for y in range(patch_collision_subdivisions):
-						#for x in range(patch_collision_subdivisions):
-							#var v0: Vector3 = grid[y][x]
-							#var v1: Vector3 = grid[y][x + 1]
-							#var v2: Vector3 = grid[y + 1][x]
-							#var v3: Vector3 = grid[y + 1][x + 1]
-#
-							## triangle 1
-							#collision_patches.append_array([v0, v2, v1])
-#
-							## triangle 2
-							#collision_patches.append_array([v1, v2, v3])
+	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		var face := faces[f]
+		
+		if face.type & FACE_TYPE.PATCH:
+			if not patches_to_tessellate.has(face.texture_id):
+				patches_to_tessellate[face.texture_id] = []
 
-	# now make the collision geometry
+			patches_to_tessellate[face.texture_id].append(face)
+	
+	# now actually tessellate them.
+	for key in patches_to_tessellate:
+		var face_list: Array = patches_to_tessellate[key]
+		var f: BSPFace = face_list[0] # all the faces in a patch should be the same data
+		
+		var patch := {
+			"meta": {
+				"texture_name": textures[f.texture_id].name,
+				"flags": textures[f.texture_id].flags,
+				"content_flags": textures[f.texture_id].content_flags
+			},
+			"geometry": PackedVector3Array()
+		}
+	
+		for face: BSPFace in face_list:
+			var width := face.size[0]
+			var height := face.size[1]
+			
+			for py in range(0, height - 1, 2):
+				for px in range(0, width - 1, 2):
+					var ctrl := []
+					var grid := []
+					
+					for j in range(3):
+						for i in range(3):
+							var idx := face.start_vert_index + (py + j) * width + (px + i)
+							ctrl.append(vertices[idx])
+							
+					for y in range(patch_collision_subdivisions + 1):
+						var ty := float(y) / patch_collision_subdivisions
+						var row := []
+						
+						for x in range(patch_collision_subdivisions + 1):
+							var tx := float(x) / patch_collision_subdivisions
+							
+							var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
+							var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
+							var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+
+							var vtx = bezier3(r0, r1, r2, ty)
+
+							row.append(vtx)
+
+						grid.append(row)
+						
+					for y in range(patch_collision_subdivisions):
+						for x in range(patch_collision_subdivisions):
+							var v0: Vector3 = grid[y][x]
+							var v1: Vector3 = grid[y][x + 1]
+							var v2: Vector3 = grid[y + 1][x]
+							var v3: Vector3 = grid[y + 1][x + 1]
+
+							patch.geometry.append_array([
+								v0, v1, v3,
+								v0, v3, v2,
+								#v0, v2, v1, 
+								#v1, v2, v3
+							])
+		if not patch.geometry.is_empty():
+			tessellated_patches.append(patch)
+
+	# now make the brush collision geometry...
 	# TODO: clean this up, just a copy/paste from the old method
 	for brush: BSPBrush in collision_brushes:
 		var texture_id: int = brush.texture_id
@@ -1170,16 +1188,21 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collision_shape.owner = bsp_scene
 			collision_shape.set_meta("planes", metadata[i])
 
-	#if not collision_patches.is_empty():
-		#for p in collision_patches:
-			#var concave_polygon_shape := ConcavePolygonShape3D.new()
-			#var collider := CollisionShape3D.new()
-			#
-			#concave_polygon_shape.set_faces(p)
-			#collider.shape = concave_polygon_shape
-			#
-			#collision_body.add_child(collider, true)
-			#collider.owner = bsp_scene
+	# and finally the patch collisions!
+	if not tessellated_patches.is_empty():
+		for p in tessellated_patches:
+			if p.geometry.is_empty():
+				continue
+
+			var concave_polygon_shape := ConcavePolygonShape3D.new()
+			var collider := CollisionShape3D.new()
+			
+			concave_polygon_shape.set_faces(p.geometry)
+			collider.shape = concave_polygon_shape
+			collider.set_meta("patch", p.meta)
+			
+			collision_body.add_child(collider, true)
+			collider.owner = bsp_scene
 
 
 # get all the entities that aren't lights or worldspawn and...
