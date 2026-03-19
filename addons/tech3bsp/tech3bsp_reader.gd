@@ -1097,8 +1097,8 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 							var v3: Vector3 = grid[y + 1][x + 1]
 
 							patch.geometry.append_array([
-								v0, v1, v3,
-								v0, v3, v2,
+								v0, v3, v1,
+								v0, v2, v3,
 							])
 		
 		if not patch.geometry.is_empty():
@@ -1384,10 +1384,10 @@ func tessellate_patch_face(face: BSPFace, surface: Dictionary, vertex_color: boo
 					var i3 = i2 + 1
 
 					st.add_index(i0)
-					st.add_index(i2)
+					st.add_index(i3)
 					st.add_index(i1)
 
-					st.add_index(i1)
+					st.add_index(i0)
 					st.add_index(i2)
 					st.add_index(i3)
 
@@ -1727,8 +1727,8 @@ func add_occluder() -> void:
 							var i3 := i2 + 1
 
 							occluder_indices.append_array([
-								i0, i1, i3,
-								i0, i3, i2
+								i0, i3, i1,
+								i0, i2, i3
 							])
 
 			offset += occluder_vertices.size() - previous_size
