@@ -405,68 +405,6 @@ func clear_data() -> void:
 	light_grid_cartesian = null
 
 
-func split_face_groups(dict: Dictionary) -> Array[Dictionary]:
-	var chunks: Array[Dictionary]
-	var current_chunk: Dictionary = {}
-	var counter := 0
-	
-	for key in dict.keys():
-		current_chunk[key] = dict[key]
-		counter += 1
-
-		if counter >= MAX_MESH_SURFACES:
-			chunks.append(current_chunk.duplicate())
-			current_chunk.clear()
-			counter = 0
-
-	if current_chunk.size() > 0:
-		chunks.append(current_chunk)
-
-	return chunks
-
-
-func face_groups(model: BSPModel, face_types: Array[FACE_TYPE]) -> Dictionary:
-	var model_faces := {}
-	
-	for i in range(model.num_faces):
-		var face_index = model.face + i
-		var face = faces[face_index]
-
-		if !face_types.has(face.type):
-			continue
-		
-		var key: Array
-		if options.import_lightmaps:
-			if face.lightmap_id >= 0:
-				key = [face.texture_id, 0]
-			else:
-				key = [face.texture_id, face.lightmap_id]
-			
-		else:
-			key = [face.texture_id, -1]
-		
-		if not model_faces.has(key):
-			model_faces[key] = []
-		model_faces[key].append(face)
-
-	return model_faces
-
-
-# TODO: I'm being lazy with patches right now, just split them when we hit MAX_MESH_SURFACES
-func split_patches(patches: Array[Dictionary]) -> Array[Array]:
-	var result: Array[Array] = []
-	
-	if patches.size() > MAX_MESH_SURFACES:
-		var i := 0
-		while i < patches.size():
-			result.append(patches.slice(i, i + MAX_MESH_SURFACES))
-			i += MAX_MESH_SURFACES
-	else:
-		result.append(patches)
-	
-	return result
-
-
 # Use the maps texture name to perform a lookup in a user-defined
 # materials path matching a string
 # e.g. "textures/liquids/water_02" becomes
@@ -865,28 +803,6 @@ func parse_lightmaps(lightmap_lump) -> void:
 		#img.generate_mipmaps()
 	#lightmap_atlas.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
 	lightmap_atlas = ImageTexture.create_from_image(lightmap_atlas_image)
-	#print(error_string(ResourceSaver.save(lightmap_data.lightmap, "res://lightmap1.png")))
-		
-		#var pixel_size: int = DEFAULT_LIGHTMAP_SIZE
-		#var base_tex := Image.create_empty(pixel_size, pixel_size, false, Image.FORMAT_RGB8)
-#
-		#var l = 0
-		#for y in range(pixel_size):
-			#for x in range(pixel_size):
-				#lightmap_colors = scale_color(Color(lightmap_bytes[l], lightmap_bytes[l + 1], lightmap_bytes[l + 2]))
-				#base_tex.set_pixel(x, y, lightmap_colors)
-				#l += 3
-		#
-		#base_tex.generate_mipmaps()
-		## Possible BUG! compress_from_channels resizes the image for some reason
-		## in lightmaps this leads to big gross seams
-		## and in lightgrids the scale is wrong
-		##base_tex.compress_from_channels(Image.COMPRESS_BPTC, Image.USED_CHANNELS_RGB)
-		#var tex = ImageTexture.create_from_image(base_tex)
-		#lightmaps.append(tex)
-		# TODO: optional internal lightmap image saving?
-	#for lm in range(lightmaps.size()):
-		#ResourceSaver.save(lightmaps[lm], "res://%s-%d.png" % ["lightmap", lm])
 
 
 func spherical_to_cartesian(latitude: float, longitude: float) -> Vector3:
@@ -1055,6 +971,7 @@ func try_box_from_convex_points(points: PackedVector3Array) -> Dictionary:
 		"transform": Transform3D(Basis(), center)
 	}
 
+
 # TODO: these HAVE to be axis-aligned since they just use the fog box shape, rotating the node after is a b... ig pain.
 func build_fog_volume(points: PackedVector3Array, texture_id: int) -> FogVolume:
 	var material := material_from_path(texture_id, -1)
@@ -1084,8 +1001,19 @@ func build_fog_volume(points: PackedVector3Array, texture_id: int) -> FogVolume:
 	return fog
 
 
-func add_brush_collisions(bsp_model: BSPModel, parent: Node) -> void:
+func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	var collision_body: CollisionObject3D
+
+	var collision_brushes: Array[BSPBrush] # brushes
+	var collision_patches := {}#PackedVector3Array() # patches as vertices
+	
+	# TODO: maybe we can get away with reducing this...
+	var patch_collision_subdivisions: float = options.patch_detail
+	var stride := patch_collision_subdivisions + 1
+	
+	var water_body: Node3D
+	var slime_body: Node3D
+	var lava_body: Node3D
 	
 	# try to guess if the parent is a physics scene
 	if parent is CollisionObject3D:
@@ -1094,18 +1022,66 @@ func add_brush_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		collision_body = StaticBody3D.new()
 		parent.add_child(collision_body, true)
 		collision_body.owner = bsp_scene
-	
-	var water_body: Node3D
-	var slime_body: Node3D
-	var lava_body: Node3D
-	
-	#static_body.name = "StaticBody3D_BrushColliders"
-	
-	var collision_brushes: Array[BSPBrush]
-	for i in range(bsp_model.num_brushes):
-		collision_brushes.append(brushes[bsp_model.brush + i])
-	# textures[b.texture_id].name
 
+	# get brushes for this model
+	for i in range(bsp_model.brush, bsp_model.brush + bsp_model.num_brushes):
+		collision_brushes.append(brushes[i])
+
+	# get patches for this model (if any)
+	# first, de-dup surfaces (because we want one shape per surface)
+	#for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		#var face := faces[f]
+		#
+		#if not collision_patches.has(face.texture_id):
+			#collision_patches[face.texture_id] = face
+	#
+	#for face: BSPFace in collision_patches:
+		#if face.type & FACE_TYPE.PATCH:
+			#var width := face.size[0]
+			#var height := face.size[1]
+			#
+			#for py in range(0, height - 1, 2):
+				#for px in range(0, width - 1, 2):
+					#var ctrl := []
+					#var grid := []
+					#
+					#for j in range(3):
+						#for i in range(3):
+							#var idx := face.start_vert_index + (py + j) * width + (px + i)
+							#ctrl.append(vertices[idx])
+							#
+					#for y in range(patch_collision_subdivisions + 1):
+						#var ty := float(y) / patch_collision_subdivisions
+						#var row := []
+						#
+						#for x in range(patch_collision_subdivisions + 1):
+							#var tx := float(x) / patch_collision_subdivisions
+							#
+							#var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
+							#var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
+							#var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+#
+							#var pos = bezier3(r0, r1, r2, ty)
+#
+							#row.append(pos)
+#
+						#grid.append(row)
+						#
+					#for y in range(patch_collision_subdivisions):
+						#for x in range(patch_collision_subdivisions):
+							#var v0: Vector3 = grid[y][x]
+							#var v1: Vector3 = grid[y][x + 1]
+							#var v2: Vector3 = grid[y + 1][x]
+							#var v3: Vector3 = grid[y + 1][x + 1]
+#
+							## triangle 1
+							#collision_patches.append_array([v0, v2, v1])
+#
+							## triangle 2
+							#collision_patches.append_array([v1, v2, v3])
+
+	# now make the collision geometry
+	# TODO: clean this up, just a copy/paste from the old method
 	for brush: BSPBrush in collision_brushes:
 		var texture_id: int = brush.texture_id
 		var content_flags: int = textures[texture_id].content_flags
@@ -1194,274 +1170,16 @@ func add_brush_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collision_shape.owner = bsp_scene
 			collision_shape.set_meta("planes", metadata[i])
 
-
-# for patches (bezier curves)
-func bezier_basis_3(t: float) -> Array[float]:
-	var b0 := (1.0 - t) * (1.0 - t)
-	var b1 := 2.0 * t * (1.0 - t)
-	var b2 := t * t
-	return [b0, b1, b2]
-
-func evaluate_patch(patch: Array, u: float, v: float) -> Vector3:
-	var bu := bezier_basis_3(u)
-	var bv := bezier_basis_3(v)
-	var point := Vector3.ZERO
-
-	for y in range(3):
-		for x in range(3):
-			var weight := bu[x] * bv[y]
-			point += patch[y * 3 + x] * weight
-	return point
-
-func evaluate_patch_uvs(patch: Array, u: float, v: float) -> Vector2:
-	var bu := bezier_basis_3(u)
-	var bv := bezier_basis_3(v)
-	var uv := Vector2.ZERO
-
-	for y in range(3):
-		for x in range(3):
-			var weight := bu[x] * bv[y]
-			uv += patch[y * 3 + x] * weight
-	return uv
-
-func evaluate_patch_color(patch: Array, u: float, v: float) -> Color:
-	#print(patch[0][0] * 0)
-	var bu := bezier_basis_3(u)
-	var bv := bezier_basis_3(v)
-	var result := Color(0, 0, 0, 0)
-	for j: int in range(3):
-		for i: int in range(3):
-			var weight := bu[i] * bv[j]
-			var color: Color = patch[j]
-
-			result += color * weight
-	return result
-
-func tessellate_patch(patch: Array, divisions: int) -> PackedVector3Array:
-	var verts: PackedVector3Array
-
-	for iy in range(divisions):
-		var v0 := iy / float(divisions)
-		var v1 := (iy + 1) / float(divisions)
-		for ix in range(divisions):
-			var u0 := ix / float(divisions)
-			var u1 := (ix + 1) / float(divisions)
-
-			# Quad corners
-			var p00 := evaluate_patch(patch, u0, v0)
-			var p10 := evaluate_patch(patch, u1, v0)
-			var p01 := evaluate_patch(patch, u0, v1)
-			var p11 := evaluate_patch(patch, u1, v1)
-
-			# Two triangles per quad
-			verts.append_array([p00, p11, p10])  # Triangle 1
-			verts.append_array([p00, p01, p11])  # Triangle 2
-
-	return verts
-
-# TODO: maybe... could just write one and return a Variant
-# then it can handle Vector3 and Vector2 and Color
-# instead of 3 separate functions... maybe...
-func tessellate_patch_uvs(patch: Array, divisions: int) -> PackedVector2Array:
-	var uvs: PackedVector2Array
-
-	for iy in range(divisions):
-		var v0 := iy / float(divisions)
-		var v1 := (iy + 1) / float(divisions)
-		for ix in range(divisions):
-			var u0 := ix / float(divisions)
-			var u1 := (ix + 1) / float(divisions)
-
-			var uv00 := evaluate_patch_uvs(patch, u0, v0)
-			var uv10 := evaluate_patch_uvs(patch, u1, v0)
-			var uv01 := evaluate_patch_uvs(patch, u0, v1)
-			var uv11 := evaluate_patch_uvs(patch, u1, v1)
-
-			uvs.append_array([uv00, uv11, uv10])
-			uvs.append_array([uv00, uv01, uv11])
-
-	return uvs
-
-
-func tessellate_patch_colors(patch: Array, divisions: int) -> PackedColorArray:
-	var colors: PackedColorArray
-
-	for iy in range(divisions):
-		var v0 := iy / float(divisions)
-		var v1 := (iy + 1) / float(divisions)
-		for ix in range(divisions):
-			var u0 := ix / float(divisions)
-			var u1 := (ix + 1) / float(divisions)
-
-			var c00 := evaluate_patch_color(patch, u0, v0)
-			var c10 := evaluate_patch_color(patch, u1, v0)
-			var c01 := evaluate_patch_color(patch, u0, v1)
-			var c11 := evaluate_patch_color(patch, u1, v1)
-
-			colors.append_array([c00, c11, c10])
-			colors.append_array([c00, c01, c11])
-
-	return colors
-
-# TODO (maybe): rewrite all of the above into this unified function
-#func tessellate_patch_unified(patch: Dictionary) -> Dictionary:
-	#var bez_basis_3 = func(t: float) -> Array[float]:
-		#var omt = 1.0 - t
-		#return [omt * omt, 2.0 * t * omt, t * t]
-	#
-	#var eval = func()
-	#
-	#print(patch)
-	#var result: Dictionary
-	#return result
-
-# beziers and whatnot - handles both mesh and collision
-# TODO: fuse vertices?
-func add_patches(bsp_model: BSPModel, parent: Node) -> void:
-	var patch_faces := face_groups(bsp_model, [FACE_TYPE.PATCH])
-	var patch_chunks := split_face_groups(patch_faces)
-
-	if patch_chunks.is_empty() or patch_faces.is_empty():
-		return
-
-	for patch_chunk in patch_chunks:
-		for patch_group: Array in patch_chunk:
-			var mesh := ArrayMesh.new()
-			var texture_id: int = patch_group[0]
-			var lightmap_id: int = patch_group[1]
-			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
-			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
-
-			# Pretty sure we can just jump out if it's a fog patch
-			# Godot fog volumes can't have arbitary shapes
-			# ... well, they sort of can with density textures...
-			# ugh... TODO
-			if content_flags & CONTENT_FLAGS.FOG:
-				continue
-
-			var collision_faces: PackedVector3Array
-
-			var metadata := {
-					"texture_name" : textures[texture_id].name,
-					"flags" : surface_flags,
-					"content_flags" : content_flags
-			}
-
-			var surface_tool := SurfaceTool.new()
-			var material := material_from_path(texture_id, lightmap_id)
-			var patches: Array[Dictionary]
-
-			for face: BSPFace in patch_faces[patch_group]:
-				var lm_col := 0
-				var lm_row := 0
-				if options.import_lightmaps and external_lightmaps.is_empty():
-					lm_col = face.lightmap_id % lightmap_columns
-					lm_row = face.lightmap_id / lightmap_columns
-				for m in range((face.size[1] - 1) / 2):
-					var j := 2 * m
-					for n in range((face.size[0] - 1) / 2):
-						var i := 2 * n
-						var patch := {
-							"verts": [],
-							"uvs": [],
-							"uv2s": [],
-							"colors": []
-						}
-						for dy in range(3):
-							for dx in range(3):
-								var vx := i + dx
-								var vy := j + dy
-								var bsp_vertex := vertices[face.start_vert_index + (vy * face.size[0] + vx)]
-
-								patch["verts"].append(bsp_vertex.position)
-								patch["uvs"].append(bsp_vertex.uv)
-								if external_lightmaps.is_empty():
-									var uv2 := bsp_vertex.uv2
-									uv2.x = (uv2.x + lm_col) / lightmap_columns
-									uv2.y = (uv2.y + lm_row) / lightmap_rows
-									patch["uv2s"].append(uv2)
-								else:
-									patch["uv2s"].append(bsp_vertex.uv2)
-								patch["colors"].append(bsp_vertex.color)
-						patches.append(patch)
-
-			# FIXME: This is much faster but we could still dedup verts
-			# for example, WRATH maps have sooooo many patches...
-			var patch_splits := split_patches(patches)
-
-			var uvs: PackedVector2Array = []
-			var uv2s: PackedVector2Array = []
-			var colors: PackedColorArray = []
-			var geometry: PackedVector3Array = []
-
-			for patch_split: Array in patch_splits:
-				if mesh.get_surface_count() == MAX_MESH_SURFACES:
-					mesh = ArrayMesh.new()
-
-				for patch: Dictionary in patch_split:
-					#tessellate_patch_unified(patch)
-					uvs.append_array(tessellate_patch_uvs(patch.uvs, options.patch_detail))
-					uv2s.append_array(tessellate_patch_uvs(patch.uv2s, options.patch_detail))
-					colors.append_array(tessellate_patch_colors(patch.colors, options.patch_detail))
-					geometry.append_array(tessellate_patch(patch.verts, options.patch_detail))
-
-			collision_faces.append_array(geometry)
-
-			surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-			for i in range(geometry.size()):
-				surface_tool.set_uv(uvs[i])
-				surface_tool.set_uv2(uv2s[i])
-				if options.import_vertex_colors:
-					if !options.import_lightmaps or lightmap_id < 0:
-						surface_tool.set_color(colors[i])
-				surface_tool.add_vertex(geometry[i])
-
-			surface_tool.index()
-			surface_tool.generate_normals()
-			surface_tool.generate_tangents()
-			surface_tool.optimize_indices_for_cache()
-			surface_tool.set_material(material)
-			surface_tool.commit(mesh)
-			surface_tool.clear()
-
-			# patches can be used for collisions only (OpenArena does this)
-			# however since we're generating them from triangle meshes, we still need the MESH
-			# but not necessarily the mesh INSTANCE... so just don't make one
-			if not surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-				var mesh_instance := MeshInstance3D.new()
-				#mesh_instance.name = "MeshInstance3D_%s_patch" % textures[texture_id].name
-				mesh_instance.mesh = mesh
-				parent.add_child(mesh_instance, true)
-				mesh_instance.owner = bsp_scene
-
-			# move along if there aren't any collisions to generate.
-			if surface_flags & SURFACE_FLAGS.NONSOLID and not content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA):
-				continue
-
-			var collision_parent # can be a liquid scene
-			var concave_polygon_shape := ConcavePolygonShape3D.new()
-			var collision_shape := CollisionShape3D.new()
-			collision_shape.shape = concave_polygon_shape
-			concave_polygon_shape.set_faces(collision_faces)
-
-			if content_flags & CONTENT_FLAGS.WATER:
-				collision_parent = options.water_scene.instantiate()
-			elif content_flags & CONTENT_FLAGS.SLIME:
-				collision_parent = options.slime_scene.instantiate()
-			elif content_flags & CONTENT_FLAGS.LAVA:
-				collision_parent = options.lava_scene.instantiate()
-			else:
-				if parent is CollisionObject3D:
-					collision_parent = parent
-				else:
-					collision_parent = StaticBody3D.new()
-
-			if collision_parent != parent:
-				parent.add_child(collision_parent, true)
-			collision_parent.add_child(collision_shape, true)
-			collision_parent.owner = bsp_scene
-			collision_shape.owner = bsp_scene
-			collision_shape.set_meta("patch", metadata)
+	#if not collision_patches.is_empty():
+		#for p in collision_patches:
+			#var concave_polygon_shape := ConcavePolygonShape3D.new()
+			#var collider := CollisionShape3D.new()
+			#
+			#concave_polygon_shape.set_faces(p)
+			#collider.shape = concave_polygon_shape
+			#
+			#collision_body.add_child(collider, true)
+			#collider.owner = bsp_scene
 
 
 # get all the entities that aren't lights or worldspawn and...
@@ -1533,249 +1251,229 @@ func add_entities() -> void:
 			# this entity has a brush model (door, lift, trigger, etc)
 			var model_index: int = entity["model"].substr(1).to_int()
 
-			add_brush_meshes(models[model_index], entity_scene)
-			add_brush_collisions(models[model_index], entity_scene)
-			# entities can have patches, apparently.
-			add_patches(models[model_index], entity_scene)
+			add_bsp_model(models[model_index], entity_scene)
+			add_collisions(models[model_index], entity_scene)
+			#add_brush_collisions(models[model_index], entity_scene)
 
 
-func append_surface(surfaces, face: BSPFace) -> void:
-	var base: int = surfaces.vertices.size()
+### New patch functions ###
 
-	var lm_col := 0
-	var lm_row := 0
-	if options.import_lightmaps:
-		lm_col = face.lightmap_id % lightmap_columns
-		lm_row = face.lightmap_id / lightmap_columns
+# unified bezier processer
+func bezier3(a: Variant, b: Variant, c: Variant, t: float) -> Variant:
+	var it: float = 1.0 - t
+	return a * (it * it) + b * (2.0 * it * t) + c * (t * t)
 
-	for i in range(face.num_verts):
-		var v := vertices[face.start_vert_index + i]
-		
-		surfaces.vertices.append(v.position)
-		surfaces.normals.append(v.normal)
-		surfaces.uv.append(v.uv)
-		
-		var uv2 = v.uv2
-		uv2.x = (uv2.x + lm_col) / lightmap_columns
-		uv2.y = (uv2.y + lm_row) / lightmap_rows
-		
-		surfaces.uv2.append(uv2)
+
+func bezier3_vertex(a: BSPVertex, b: BSPVertex, c: BSPVertex, t: float) -> BSPVertex:
+	# HACK: not really meant to be instantiated like this, can't overload constructors though -_(^_^)_-
+	var v := BSPVertex.new(-1, Vector3.ZERO, 0, 0, 0, 0, Vector3.UP, PackedByteArray([255, 255, 255, 255]))
 	
-	for i in range(face.num_indices):
-		surfaces.indices.append(base + indices[face.start_index + i])
-
-# TODO: with the new lightmap atlas, no need for all the special grouping
-func add_model(bsp_model: BSPModel, parent: Node) -> void:
-	#var meshes: Array[ArrayMesh]
-	var surfaces := {}
+	v.position = bezier3(a.position, b.position, c.position, t)
+	v.normal = bezier3(a.normal, b.normal, c.normal, t).normalized()
+	v.uv = bezier3(a.uv, b.uv, c.uv, t)
+	v.uv2 = bezier3(a.uv2, b.uv2, c.uv2, t)
+	v.color = a.color.lerp(b.color, t).lerp(c.color, t * t) # close enough
 	
-	var offset := 0
+	return v
+
+
+func tessellate_patch_face(face: BSPFace, surface: Dictionary, vertex_color: bool, subdivisions: int) -> void:
+	var st: SurfaceTool = surface.st
 	
-	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
-		var face := faces[f]
-		
-		if face.type & (FACE_TYPE.BILLBOARD | FACE_TYPE.PATCH):
-			continue
-		
-		var id := face.texture_id
-		
-		if not surfaces.has(id):
-			surfaces[id] = {
-				"vertices": PackedVector3Array(),
-				"normals": PackedVector3Array(),
-				"uv": PackedVector2Array(),
-				"uv2": PackedVector2Array(),
-				"indices": PackedInt32Array()
-			}
+	var width := face.size[0]
+	var height := face.size[1]
+	
+	for py in range(0, height - 1, 2):
+		for px in range(0, width - 1, 2):
+			var ctrl := []
+			var grid := []
+			
+			for j in range(3):
+				for i in range(3):
+					var idx := face.start_vert_index + (py + j) * width + (px + i)
+					ctrl.append(vertices[idx])
+			
+			for y in range(subdivisions + 1):
+				var ty := float(y) / float(subdivisions)
+				var row := []
+				
+				for x in range(subdivisions + 1):
+					var tx := float(x) / float(subdivisions)
+					
+					var r0 = bezier3_vertex(ctrl[0], ctrl[1], ctrl[2], tx)
+					var r1 = bezier3_vertex(ctrl[3], ctrl[4], ctrl[5], tx)
+					var r2 = bezier3_vertex(ctrl[6], ctrl[7], ctrl[8], tx)
+					
+					var vtx = bezier3_vertex(r0, r1, r2, ty)
+					
+					if options.import_lightmaps and external_lightmaps.is_empty():
+						var lm_col := face.lightmap_id % lightmap_columns
+						var lm_row := face.lightmap_id / lightmap_columns
+						vtx.uv2.x = (vtx.uv2.x + lm_col) / lightmap_columns
+						vtx.uv2.y = (vtx.uv2.y + lm_row) / lightmap_rows
+					
+					row.append(vtx)
+				
+				grid.append(row)
 
-		append_surface(surfaces[id], face)
+			var base: int = surface.vertex_count
+			var stride := subdivisions + 1
+			
+			for y in range(subdivisions + 1):
+				for x in range(subdivisions + 1):
+					var vtx: BSPVertex = grid[y][x]
+					add_vertex_to_surface(st, vtx, vtx.uv2, vertex_color)
+					surface.vertex_count += 1
+			
+			for y in range(subdivisions):
+				for x in range(subdivisions):
+					var i0 = base + y * stride + x
+					var i1 = i0 + 1
+					var i2 = i0 + stride
+					var i3 = i2 + 1
 
-	var mesh := ArrayMesh.new()
+					st.add_index(i0)
+					st.add_index(i2)
+					st.add_index(i1)
 
-	for key in surfaces.keys():
-		var surface = surfaces[key]
+					st.add_index(i1)
+					st.add_index(i2)
+					st.add_index(i3)
 
-		var arrays := []
-		arrays.resize(Mesh.ARRAY_MAX)
 
-		arrays[Mesh.ARRAY_VERTEX] = surface.vertices
-		arrays[Mesh.ARRAY_NORMAL] = surface.normals
-		arrays[Mesh.ARRAY_TEX_UV] = surface.uv
-		arrays[Mesh.ARRAY_TEX_UV2] = surface.uv2
-		arrays[Mesh.ARRAY_INDEX] = surface.indices
+func add_vertex_to_surface(st: SurfaceTool, v: BSPVertex, uv2: Vector2, vertex_color := false):
+	st.set_normal(v.normal)
+	st.set_uv(v.uv)
+	st.set_uv2(uv2)
 
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	if vertex_color:
+		st.set_color(v.color)
 
+	st.add_vertex(v.position)
+
+
+func generate_surface(s: Dictionary, texture_id: int, lightmap_id: int, transparent := false) -> Dictionary:
+	if not s.has(texture_id):
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_material(material_from_path(texture_id, lightmap_id))
+		s[texture_id] = {
+			"st": st,
+			"vertex_count": 0,
+			"transparent": transparent
+		}
+	return s[texture_id]
+
+
+func create_bsp_mesh(mesh: ArrayMesh, parent: Node) -> void:
+	if !mesh or mesh.get_surface_count() == 0:
+		return
+	
+	if !options.import_lightmaps:
+		var texel_size: float = (1.0 / options.unit_scale) * 4.0
+		mesh.lightmap_unwrap(bsp_scene.transform, texel_size)
+	
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
-	bsp_scene.add_child(mi)
+	parent.add_child(mi, true)
 	mi.owner = bsp_scene
 
 
-func add_brush_meshes(bsp_model: BSPModel, parent: Node) -> void:
-	var brush_faces := face_groups(bsp_model, [FACE_TYPE.POLYGON, FACE_TYPE.MESH])
-	# just in case we end up with more than 256 surfaces, or whatever MAX_MESH_SURFACES is.
-	# if we're splitting the mesh anyway this basically shouldn't matter
-	var brush_chunks := split_face_groups(brush_faces)
+func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
+	var surfaces := {}
+	#var transparent_surfaces := {}
 
-	if brush_chunks.is_empty() or brush_faces.is_empty():
-		return
+	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		var face := faces[f]
 
-	var big_meshes: Array[ArrayMesh]
-
-	var split_mesh := false
-	# bmodels are already kind of "split" anyway since they aren't part of the static world.
-	if parent == bsp_scene and options.split_mesh:
-		# TODO: somehow use vis data for split or use a grid.
-		# the problem with vis data is that leafs can be as granular
-		# as a single quad (maybe even a single triangle) which does not
-		# play nice with Godot...
-		# so for now just split surfaces into individual meshes here.
-		split_mesh = true
-
-	for brush_chunk in brush_chunks:
-		var big_mesh := ArrayMesh.new()
-		for brush_face: Array in brush_chunk:
-			var texture_id: int = brush_face[0]
-			var lightmap_id: int = brush_face[1]
-			var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
-			var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
-			var translucent := false
-			var sky := false
-
-			# TODO: shaders can maybe override these flags, so these are not reliable
-			if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
-				continue
-			if options.remove_skies:
-				if surface_flags & SURFACE_FLAGS.SKY:
-					continue
-			if !options.remove_skies and surface_flags & SURFACE_FLAGS.SKY:
-				sky = true
-
-			if content_flags & CONTENT_FLAGS.FOG:
-				# handled in collision generation instead
-				# TODO: compatibility fallback fog effect?
-				continue
-
-			# TODO: idtech3 shaders can overwrite this stuff...
-			if content_flags & CONTENT_FLAGS.TRANSLUCENT:# and not textures[texture_id].content_flags & (CONTENT_FLAGS.LAVA | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.WATER | CONTENT_FLAGS.FOG):
-				translucent = true
-
-			var surface_tool := SurfaceTool.new()
-			var material := material_from_path(texture_id, lightmap_id)
-
-			surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-			surface_tool.set_material(material)
-			var offset := 0
-
-			for face: BSPFace in brush_faces[brush_face]:
-				var lm_col := 0
-				var lm_row := 0
-				if options.import_lightmaps and external_lightmaps.is_empty():
-					lm_col = face.lightmap_id % lightmap_columns
-					lm_row = face.lightmap_id / lightmap_columns
+		var texture_id := face.texture_id
+		var lightmap_id := face.lightmap_id
+		var vertex_color := false if options.import_lightmaps or lightmap_id >= 0 else true
+		
+		var surface_flags := textures[texture_id].flags
+		var content_flags := textures[texture_id].content_flags
+		
+		if surface_flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.HINT | SURFACE_FLAGS.SKIP):
+			continue
+		if options.remove_skies and surface_flags & SURFACE_FLAGS.SKY:
+			continue
+		if content_flags & CONTENT_FLAGS.FOG:
+			continue
+		
+		var surface: Dictionary
+		
+		if content_flags & (CONTENT_FLAGS.LAVA | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.WATER | CONTENT_FLAGS.TRANSLUCENT):
+			surface = generate_surface(surfaces, texture_id, lightmap_id, true)
+		else:
+			surface = generate_surface(surfaces, texture_id, lightmap_id)
+		
+		var st: SurfaceTool = surface.st
+		var offset: int = surface.vertex_count
+		
+		match face.type:
+			FACE_TYPE.POLYGON, FACE_TYPE.MESH:
 				for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
-					surface_tool.set_normal(vertices[v].normal)
-					surface_tool.set_uv(vertices[v].uv)
+					var vertex := vertices[v]
+					var uv2 := vertex.uv2
 					
-					if external_lightmaps.is_empty():
-						var uv2 = vertices[v].uv2
+					if options.import_lightmaps and external_lightmaps.is_empty():
+						var lm_col := face.lightmap_id % lightmap_columns
+						var lm_row := face.lightmap_id / lightmap_columns
 						uv2.x = (uv2.x + lm_col) / lightmap_columns
 						uv2.y = (uv2.y + lm_row) / lightmap_rows
-						surface_tool.set_uv2(uv2)
-					else:
-						surface_tool.set_uv2(vertices[v].uv2)
-						
-					if options.import_vertex_colors:
-						if !options.import_lightmaps or lightmap_id < 0:
-							surface_tool.set_color(vertices[v].color)
-					surface_tool.add_vertex(vertices[v].position)
+					
+					add_vertex_to_surface(st, vertex, uv2, vertex_color)
+					surface.vertex_count += 1
 
 				for i in range(face.start_index, face.start_index + face.num_indices):
-					surface_tool.add_index(indices[i] + offset)
+					st.add_index(indices[i] + offset)
 
-				offset += face.num_verts
+			FACE_TYPE.PATCH:
+				tessellate_patch_face(face, surface, vertex_color, options.patch_detail)
 
-			surface_tool.optimize_indices_for_cache()
-			# give each transparent face its own mesh for sorting purposes.
-			# FIXME: this isn't always giving individual faces, probably
-			# due to the grouping. Fine for water and stuff, unless that water
-			# has multiple visible sides :/
-			if translucent or sky:
-				var translucent_mesh := surface_tool.commit()
-				var translucent_mesh_instance := MeshInstance3D.new()
-				translucent_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-				#transparent_mesh_instance.name = "MeshInstance3D_%s_transparent" % textures[texture_id].name
-				translucent_mesh_instance.mesh = translucent_mesh
-				parent.add_child(translucent_mesh_instance, true)
-				translucent_mesh_instance.owner = bsp_scene
-				continue
-			if split_mesh:
-				var small_mesh := surface_tool.commit()
-				var mesh_instance := MeshInstance3D.new()
-				
-				surface_tool.clear()
-				#mesh_instance.name = "MeshInstance3D_%s" % textures[texture_id].name
-				mesh_instance.mesh = small_mesh
-				if options.import_lights:
-					mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
-				if !options.import_lightmaps:
-					var texel_size: float = (1.0 / options.unit_scale) * 4.0
-					small_mesh.lightmap_unwrap(bsp_scene.transform, texel_size)
-				
-				parent.add_child(mesh_instance, true)
-				mesh_instance.owner = bsp_scene
-				# if options.occlusion_culling and bsp_model == models[0]:
-				# 	var occluder_instance := OccluderInstance3D.new()
-				# 	occluder_instance.occluder = generate_occlusion_geometry(small_mesh)
-				# 	parent.add_child(occluder_instance, true)
-				# 	occluder_instance.owner = bsp_scene
-			else:
-				surface_tool.commit(big_mesh)
-				surface_tool.clear()
-		big_meshes.append(big_mesh)
+	var current_mesh := ArrayMesh.new()
+	
+	for id in surfaces:
+		var st: SurfaceTool = surfaces[id].st
+		var transparent: bool = surfaces[id].transparent
+
+		#st.index()
+		st.optimize_indices_for_cache()
+		#st.generate_normals()
+		#st.generate_tangents()
 		
-	if !split_mesh:
-		# since meshes have a maximum surface size of "RenderingServer.MAX_MESH_SURFACES" we still need to split meshes along that.
-		# otherwise it's error city and incomplete mesharrays
-		for big_mesh: ArrayMesh in big_meshes:
-			var mesh_instance := MeshInstance3D.new()
-			#mesh_instance.name = "MeshInstance3D_BrushGeometry"
-			mesh_instance.mesh = big_mesh
-			if options.import_lights:
-				mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
-			parent.add_child(mesh_instance, true)
-			mesh_instance.owner = bsp_scene
-			# if options.occlusion_culling and bsp_model == models[0]:
-			# 	var occluder_instance := OccluderInstance3D.new()
-			# 	occluder_instance.occluder = generate_occlusion_geometry(big_mesh)
-			# 	parent.add_child(occluder_instance, true)
-			# 	occluder_instance.owner = bsp_scene
-#
-			# if the user is NOT importing lightmaps and NOT splitting the mesh
-			# let's make it possible to use Godot's lightmapper.
-			if !options.import_lightmaps and !split_mesh:
-				var texel_size: float = (1.0 / options.unit_scale) * 4.0
-				big_mesh.lightmap_unwrap(bsp_scene.transform, texel_size)
+		# SPLIT MODE: right now, just one mesh per surface
+		if options.split_mesh or surfaces[id].transparent:
+			var mesh := st.commit()
+			st.clear()
+			
+			create_bsp_mesh(mesh, parent)
+			continue
+			
+		# BATCH MODE: one mesh per MAX_MESH_SURFACES
+		if current_mesh.get_surface_count() >= RenderingServer.MAX_MESH_SURFACES:
+			create_bsp_mesh(current_mesh, parent)
+			current_mesh = ArrayMesh.new()
 
+		st.commit(current_mesh)
+		st.clear()
 
-# TODO: needs to not incorporate transparent and detail geometry, etc.
-# maybe we do this during the mesh construction phase to skip some geometry?
-# func generate_occlusion_geometry(mesh: Mesh) -> ArrayOccluder3D:
-# 		var occluder_vertices: PackedVector3Array
-# 		var occluder_indices: PackedInt32Array
-# 		for i in range(mesh.get_surface_count()):
-# 			var offset := occluder_vertices.size()
-# 			var arrays := mesh.surface_get_arrays(i)
-# 			occluder_vertices.append_array(arrays[ArrayMesh.ARRAY_VERTEX])
-# 			if arrays[ArrayMesh.ARRAY_INDEX] == null:
-# 				occluder_indices.append_array(range(offset, offset + arrays[ArrayMesh.ARRAY_VERTEX].size()))
-# 			else:
-# 				for index in arrays[ArrayMesh.ARRAY_INDEX]:
-# 					occluder_indices.append(index + offset)
-# 		var array_occluder := ArrayOccluder3D.new()
-# 		array_occluder.set_arrays(occluder_vertices, occluder_indices)
-# 		return array_occluder
+	create_bsp_mesh(current_mesh, parent)
+
+### Transparent surfaces mesh section (for proper sorting) ###
+	#for id in transparent_surfaces:
+		#var st: SurfaceTool = transparent_surfaces[id].st
+		#
+		##st.index()
+		#st.optimize_indices_for_cache()
+		##st.generate_normals()
+		##st.generate_tangents()
+		#
+		## transparent meshes are always split by surface for sorting
+		#var mesh := st.commit()
+		#st.clear()
+		#
+		#create_bsp_mesh(mesh, parent)
 
 
 # if you're experimenting with Q3A maps, they do come with light ents
@@ -1883,34 +1581,34 @@ func add_world_light() -> void:
 # FIXME: not sure how flares are actually set up in idtech3
 # so consider this a placeholder.
 # TODO: can entities have billboards? if so, scrap the multimesh approach.
-func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
-	var billboard_faces := face_groups(bsp_model, [FACE_TYPE.BILLBOARD])
-	if billboard_faces.is_empty():
-		return
-
-	for billboard_group: Array in billboard_faces:
-		var texture_id: int = billboard_group[0]
-		var multi_mesh_instance := MultiMeshInstance3D.new()
-		multi_mesh_instance.name = "MultiMeshInstance3D_Billboards_%d" % texture_id
-		var multi_mesh := MultiMesh.new()
-		var mesh := QuadMesh.new()
-		var material := StandardMaterial3D.new()
-		multi_mesh_instance.multimesh = multi_mesh
-		material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mesh.material = material
-		multi_mesh.mesh = mesh
-		multi_mesh.transform_format = MultiMesh.TRANSFORM_3D
-		multi_mesh.instance_count = billboard_faces[billboard_group].size()
-		var i := 0
-		for billboard: BSPFace in billboard_faces[billboard_group]:
-			var transform := Transform3D.IDENTITY
-			transform.origin = billboard.lm_origin
-			multi_mesh.set_instance_transform(i, transform)
-			i += 1
-	
-		parent.add_child(multi_mesh_instance, true)
-		multi_mesh_instance.owner = bsp_scene
+#func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
+	#var billboard_faces := face_groups(bsp_model, [FACE_TYPE.BILLBOARD])
+	#if billboard_faces.is_empty():
+		#return
+#
+	#for billboard_group: Array in billboard_faces:
+		#var texture_id: int = billboard_group[0]
+		#var multi_mesh_instance := MultiMeshInstance3D.new()
+		#multi_mesh_instance.name = "MultiMeshInstance3D_Billboards_%d" % texture_id
+		#var multi_mesh := MultiMesh.new()
+		#var mesh := QuadMesh.new()
+		#var material := StandardMaterial3D.new()
+		#multi_mesh_instance.multimesh = multi_mesh
+		#material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		#material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		#mesh.material = material
+		#multi_mesh.mesh = mesh
+		#multi_mesh.transform_format = MultiMesh.TRANSFORM_3D
+		#multi_mesh.instance_count = billboard_faces[billboard_group].size()
+		#var i := 0
+		#for billboard: BSPFace in billboard_faces[billboard_group]:
+			#var transform := Transform3D.IDENTITY
+			#transform.origin = billboard.lm_origin
+			#multi_mesh.set_instance_transform(i, transform)
+			#i += 1
+	#
+		#parent.add_child(multi_mesh_instance, true)
+		#multi_mesh_instance.owner = bsp_scene
 	#for i in billboards.size():
 		#print("Billboard Texture: ", textures[billboards[i].texture_id].name)
 		#var test := MeshInstance3D.new()
@@ -1933,6 +1631,8 @@ func add_occluder() -> void:
 	var occluder_vertices := PackedVector3Array()
 	var occluder_indices := PackedInt32Array()
 
+	const SUBDIVISIONS = 2 # fixed value for occluders from patches
+	var stride := SUBDIVISIONS + 1
 	var offset := 0
 
 	for f in range(ws.face, ws.face + ws.num_faces):
@@ -1953,47 +1653,46 @@ func add_occluder() -> void:
 		if face.type & FACE_TYPE.PATCH:
 			var previous_size := occluder_vertices.size()
 
-			var w := face.size[0]
-			var h := face.size[1]
+			var width := face.size[0]
+			var height := face.size[1]
 
-			for py in range(0, h - 2, 2):
-				for px in range(0, w - 2, 2):
+			for py in range(0, height - 1, 2):
+				for px in range(0, width - 1, 2):
 					var ctrl := []
+					var grid := []
+					
+					var base := occluder_vertices.size()
 
 					for j in range(3):
 						for i in range(3):
-							var idx := (py + j) * w + (px + i)
-							var vert := vertices[face.start_vert_index + idx].position
-							ctrl.append(vert)
+							var idx := face.start_vert_index + (py + j) * width + (px + i)
+							ctrl.append(vertices[idx].position)
 
-					var grid := []
+					### Occluder vertices
+					for y in range(SUBDIVISIONS + 1):
+						var ty := float(y) / SUBDIVISIONS
+						for x in range(SUBDIVISIONS + 1):
+							var tx := float(x) / SUBDIVISIONS
+							
+							var r0 = bezier3(ctrl[0], ctrl[1], ctrl[2], tx)
+							var r1 = bezier3(ctrl[3], ctrl[4], ctrl[5], tx)
+							var r2 = bezier3(ctrl[6], ctrl[7], ctrl[8], tx)
+							
+							var pos = bezier3(r0, r1, r2, ty)
+							
+							occluder_vertices.append(pos)
 
-					for v_step in range(3):
-						var v := float(v_step) * 0.5
-
-						for u_step in range(3):
-							var u := float(u_step) * 0.5
-							grid.append(evaluate_patch(ctrl, u, v))
-
-					for y in range(2):
-						for x in range(2):
-							var i0 := y * 3 + x
+					### Occluder indices
+					for y in range(SUBDIVISIONS):
+						for x in range(SUBDIVISIONS):
+							var i0 := base + y * stride + x
 							var i1 := i0 + 1
-							var i2 := i0 + 3
+							var i2 := i0 + stride
 							var i3 := i2 + 1
 
-							var base := occluder_vertices.size()
-
-							occluder_vertices.append_array([
-								grid[i0],
-								grid[i1],
-								grid[i3],
-								grid[i2]
-							])
-
 							occluder_indices.append_array([
-								base + 0, base + 1, base + 2,
-								base + 0, base + 2, base + 3
+								i0, i1, i3,
+								i0, i3, i2
 							])
 
 			offset += occluder_vertices.size() - previous_size
@@ -2077,15 +1776,14 @@ func read_bsp(source_file: String) -> Node3D:
 	if options.occlusion_culling:
 		add_occluder()
 
-	#add_model(models[0], bsp_scene)
-	add_brush_meshes(models[0], bsp_scene)
-	add_brush_collisions(models[0], bsp_scene)
-	add_patches(models[0], bsp_scene)
+	add_bsp_model(models[0], bsp_scene)
+	add_collisions(models[0], bsp_scene)
+	#add_brush_collisions(models[0], bsp_scene)
 	add_entities()
 	if options.import_lights:
 		add_lights()
-	if options.import_billboards:
-		add_billboards(models[0], bsp_scene)
+	#if options.import_billboards:
+		#add_billboards(models[0], bsp_scene)
 	if options.import_lightmaps:
 		add_world_light()
 	
