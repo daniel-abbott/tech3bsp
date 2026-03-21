@@ -465,7 +465,7 @@ func material_from_texture(texture_id: int, lightmap_id: int) -> Material:
 			break
 
 	if !face_texture:
-		push_warning("No matching texture for %s, creating fallback colored material" % tex_path)
+		#push_warning("No matching texture for %s, creating fallback colored material" % tex_path)
 		material = ShaderMaterial.new()
 		material.shader = load("res://addons/tech3bsp/shaders/example_missing_texture.gdshader")
 		material.set_shader_parameter("albedo_color", Color(randf(), randf(), randf(), 1.0))
@@ -1000,23 +1000,40 @@ func build_fog_volume(points: PackedVector3Array, texture_id: int) -> FogVolume:
 	
 	return fog
 
-# TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
-# clean this thing up!
-func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
-	var collision_body: CollisionObject3D
 
-	var collision_brushes: Array[BSPBrush] # brushes
+func generate_collision_surface(s: Dictionary, texture_id: int) -> Dictionary:
+	if not s.has(texture_id):
+		s[texture_id] = {
+			"texture_id": texture_id,
+			"texture_name": textures[texture_id].name,
+			"flags": textures[texture_id].flags,
+			"content_flags": textures[texture_id].content_flags,
+			"vertices": PackedVector3Array()
+		}
+	return s[texture_id]
+
+
+# old collision builder can result in ridiculous load times and massive memory usage
+# let's try trimesh for visible polys and then convex for clip/liquid brushes
+# compare:
+# WRATH e1m1 old method: 5 minute import, 800MB usage
+# WRATH e1m1 new method: 7 second import, 150MB usage
+# unless we do one body per surface, then more like 200MB
+func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
+	var surfaces := {} # trimesh collisions
+	var collision_brushes: Array[BSPBrush] # brush clips and liquids
 	var patches_to_tessellate := {} # patch vertices, for de-duping
 	var tessellated_patches := []
 	
-	# TODO: maybe we can get away with reducing this...
-	var patch_collision_subdivisions: float = options.patch_detail
-	
+	# reduce collision geometry for patches
+	var patch_collision_subdivisions: float = max(2, options.patch_detail / 2)
+
+	var collision_body: CollisionObject3D
+
 	var water_body: Node3D
 	var slime_body: Node3D
 	var lava_body: Node3D
-	
-	# try to guess if the parent is a physics scene
+
 	if parent is CollisionObject3D:
 		collision_body = parent
 	else:
@@ -1024,98 +1041,167 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		parent.add_child(collision_body, true)
 		collision_body.owner = bsp_scene
 
-	# get brushes for this model
-	for i in range(bsp_model.brush, bsp_model.brush + bsp_model.num_brushes):
-		collision_brushes.append(brushes[i])
-
-	# get patches for this model (if any)
 	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
 		var face := faces[f]
-		
-		if face.type & FACE_TYPE.PATCH:
-			if not patches_to_tessellate.has(face.texture_id):
-				patches_to_tessellate[face.texture_id] = []
+		var texture_id := face.texture_id
+		var texture := textures[texture_id]
+		var surface_flags: SURFACE_FLAGS = texture.flags
+		var content_flags: CONTENT_FLAGS = texture.content_flags
 
-			patches_to_tessellate[face.texture_id].append(face)
-	
-	# now actually tessellate them.
-	for key in patches_to_tessellate:
-		var face_list: Array = patches_to_tessellate[key]
-		var f: BSPFace = face_list[0] # all the faces in a patch should be the same data
-		var texture_name := textures[f.texture_id].name
-		var flags := textures[f.texture_id].flags
-		var content_flags := textures[f.texture_id].content_flags
-		
-		if not content_flags & (CONTENT_FLAGS.SOLID | CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+		match face.type:
+			# for polygons and meshes we only want visible, solid faces
+			FACE_TYPE.POLYGON, FACE_TYPE.MESH:
+				if surface_flags & (SURFACE_FLAGS.NONSOLID):
+					continue
+				
+				if not content_flags & (CONTENT_FLAGS.SOLID):
+					continue
+				
+				#if content_flags & (
+					#CONTENT_FLAGS.PLAYERCLIP |
+					#CONTENT_FLAGS.MONSTERCLIP |
+					#CONTENT_FLAGS.WATER |
+					#CONTENT_FLAGS.SLIME |
+					#CONTENT_FLAGS.LAVA |
+					#CONTENT_FLAGS.FOG |
+					#CONTENT_FLAGS.TRIGGER
+				#):
+					#continue
+
+				var surface = generate_collision_surface(surfaces, texture_id)
+				
+				for i in range(face.start_index, face.start_index + face.num_indices, 3):
+					var i0 := indices[i]
+					var i1 := indices[i + 1]
+					var i2 := indices[i + 2]
+					
+					var v0 := vertices[face.start_vert_index + i0]
+					var v1 := vertices[face.start_vert_index + i1]
+					var v2 := vertices[face.start_vert_index + i2]
+					
+					surface.vertices.append(v0.position)
+					surface.vertices.append(v1.position)
+					surface.vertices.append(v2.position)
+			
+			FACE_TYPE.PATCH:
+				if not content_flags & (
+					CONTENT_FLAGS.SOLID |
+					CONTENT_FLAGS.PLAYERCLIP |
+					CONTENT_FLAGS.MONSTERCLIP |
+					CONTENT_FLAGS.WATER |
+					CONTENT_FLAGS.SLIME |
+					CONTENT_FLAGS.LAVA |
+					CONTENT_FLAGS.FOG |
+					CONTENT_FLAGS.TRIGGER
+				):
+					continue
+
+				var patch := {
+					"meta": {
+						"texture_name": texture.name,
+						"flags": texture.flags,
+						"content_flags": content_flags,
+					},
+					"geometry": PackedVector3Array()
+				}
+
+				var width := face.size[0]
+				var height := face.size[1]
+
+				for py in range(0, height - 1, 2):
+					for px in range(0, width - 1, 2):
+						var ctrl := []
+						var grid := []
+
+						# gather 3x3 control points
+						for j in range(3):
+							for i in range(3):
+								var idx := face.start_vert_index + (py + j) * width + (px + i)
+								ctrl.append(vertices[idx])
+
+						# tessellate
+						for y in range(patch_collision_subdivisions + 1):
+							var ty := float(y) / patch_collision_subdivisions
+							var row := []
+
+							for x in range(patch_collision_subdivisions + 1):
+								var tx := float(x) / patch_collision_subdivisions
+
+								var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
+								var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
+								var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+
+								var vtx = bezier3(r0, r1, r2, ty)
+								row.append(vtx)
+
+							grid.append(row)
+
+						# build triangles
+						for y in range(patch_collision_subdivisions):
+							for x in range(patch_collision_subdivisions):
+								var v0: Vector3 = grid[y][x]
+								var v1: Vector3 = grid[y][x + 1]
+								var v2: Vector3 = grid[y + 1][x]
+								var v3: Vector3 = grid[y + 1][x + 1]
+
+								patch.geometry.append_array([
+									v0, v3, v1,
+									v0, v2, v3,
+								])
+
+				if not patch.geometry.is_empty():
+					tessellated_patches.append(patch)
+
+	# collect clip and liquid brushes
+	for b in range(bsp_model.brush, bsp_model.brush + bsp_model.num_brushes):
+		var brush := brushes[b]
+
+		var texture_id: int = brush.texture_id
+		var texture_name := textures[texture_id].name
+		var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
+		#var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
+
+		# HACK! the TRIGGER content flag doesn't actually get marked for trigger entities?
+		# and they keep the SOLID flag... why...
+		if content_flags & (CONTENT_FLAGS.SOLID) and texture_name.ends_with("trigger"):
+			collision_brushes.append(brush)
+			continue
+
+		if not content_flags & (
+			CONTENT_FLAGS.PLAYERCLIP | 
+			CONTENT_FLAGS.MONSTERCLIP | 
+			CONTENT_FLAGS.WATER | 
+			CONTENT_FLAGS.SLIME | 
+			CONTENT_FLAGS.LAVA | 
+			CONTENT_FLAGS.FOG | 
+			CONTENT_FLAGS.TRIGGER
+		):
 			continue
 		
-		var patch := {
-			"meta": {
-				"texture_name": textures[f.texture_id].name,
-				"flags": textures[f.texture_id].flags,
-				"content_flags": textures[f.texture_id].content_flags
-			},
-			"geometry": PackedVector3Array()
-		}
-	
-		for face: BSPFace in face_list:
-			var width := face.size[0]
-			var height := face.size[1]
-			
-			for py in range(0, height - 1, 2):
-				for px in range(0, width - 1, 2):
-					var ctrl := []
-					var grid := []
-					
-					for j in range(3):
-						for i in range(3):
-							var idx := face.start_vert_index + (py + j) * width + (px + i)
-							ctrl.append(vertices[idx])
-							
-					for y in range(patch_collision_subdivisions + 1):
-						var ty := float(y) / patch_collision_subdivisions
-						var row := []
-						
-						for x in range(patch_collision_subdivisions + 1):
-							var tx := float(x) / patch_collision_subdivisions
-							
-							var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
-							var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
-							var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+		collision_brushes.append(brush)
 
-							var vtx = bezier3(r0, r1, r2, ty)
+	# now let's build the collisions!
+	# trimesh solids first, doesn't handle any liquids or fogs
+	for s in surfaces.values():
+		var surface_name: String = s.texture_name.get_file()
+		var collision_shape := CollisionShape3D.new()
+		var concave_shape := ConcavePolygonShape3D.new()
 
-							row.append(vtx)
+		concave_shape.set_faces(s.vertices)
+		collision_shape.name = surface_name
+		collision_shape.shape = concave_shape
 
-						grid.append(row)
-						
-					for y in range(patch_collision_subdivisions):
-						for x in range(patch_collision_subdivisions):
-							var v0: Vector3 = grid[y][x]
-							var v1: Vector3 = grid[y][x + 1]
-							var v2: Vector3 = grid[y + 1][x]
-							var v3: Vector3 = grid[y + 1][x + 1]
+		collision_body.add_child(collision_shape, true)
+		collision_shape.owner = bsp_scene
 
-							patch.geometry.append_array([
-								v0, v3, v1,
-								v0, v2, v3,
-							])
-		
-		if not patch.geometry.is_empty():
-			tessellated_patches.append(patch)
 
-	# now make the brush collision geometry...
-	# TODO: clean this up, just a copy/paste from the old method
+	# clip brushes and liquids
 	for brush: BSPBrush in collision_brushes:
 		var texture_id: int = brush.texture_id
 		var content_flags: int = textures[texture_id].content_flags
 		var surface_flags: int = textures[texture_id].flags
+		
 		var collision_parent = collision_body
-
-		if not content_flags & (CONTENT_FLAGS.SOLID | CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
-			continue
-		# TODO: handle per-SURFACE collision flags as well... going to require a totally different approach than computing from planes, may not be worth level of effort.
-		# thankfully most of those are just visual.
 		
 		if content_flags & CONTENT_FLAGS.WATER:
 			if !water_body:
@@ -1135,10 +1221,6 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 				parent.add_child(lava_body, true)
 				lava_body.owner = bsp_scene
 			collision_parent = lava_body
-
-		# TODO: idtech3 shader files can take precedence, so for example:
-		# NONSOLID might not actually mean non-solid in a collision sense,
-		# because the shader says it actually is solid. Cool...
 
 		var metadata := []
 		var collision_shapes := []
@@ -1172,6 +1254,7 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			parent.add_child(fog_child)
 			fog_child.owner = bsp_scene
 			continue
+		
 		var try_box := try_box_from_convex_points(points)
 
 		if try_box:
@@ -1194,13 +1277,23 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collision_shape.owner = bsp_scene
 			collision_shape.set_meta("planes", metadata[i])
 
-	# and finally the patch collisions!
+	# and finally tessellated patches
 	if not tessellated_patches.is_empty():
 		for p in tessellated_patches:
 			if p.geometry.is_empty():
 				continue
 
-			var collision_parent = collision_body
+			var surface_name: String = p.meta.texture_name.get_file()
+
+			#if parent is CollisionObject3D:
+				#collision_body = parent
+			#else:
+				#collision_body = StaticBody3D.new()
+				#collision_body.name = surface_name
+				#parent.add_child(collision_body, true)
+				#collision_body.owner = bsp_scene
+
+			var collision_parent := collision_body
 			
 			var flags: SURFACE_FLAGS = p.meta.flags
 			var content_flags: CONTENT_FLAGS = p.meta.content_flags
@@ -1224,15 +1317,277 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 					lava_body.owner = bsp_scene
 				collision_parent = lava_body
 
-			var concave_polygon_shape := ConcavePolygonShape3D.new()
 			var collider := CollisionShape3D.new()
+			var shape: Shape3D
 			
-			concave_polygon_shape.set_faces(p.geometry)
-			collider.shape = concave_polygon_shape
+			if content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.TRIGGER):
+				shape = ConvexPolygonShape3D.new()
+				shape.points = p.geometry
+				#collider.name = "ConvexPolygonShape3D"
+			else:
+				shape = ConcavePolygonShape3D.new()
+				shape.set_faces(p.geometry)
+				#collider.name = "ConcavePolygonShape3D"
+			
+			collider.name = p.meta.texture_name.get_file()
+			
+			collider.shape = shape
 			collider.set_meta("patch", p.meta)
 			
 			collision_parent.add_child(collider, true)
 			collider.owner = bsp_scene
+
+
+# TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
+# clean this thing up!
+# This is SUPER SLOW and MEMORY INTENSIVE for huge maps (WRATH e1m1) as was the original brush collisions generator
+#func old_add_collisions(bsp_model: BSPModel, parent: Node) -> void:
+	##var collision_body: CollisionObject3D
+#
+	#var collision_brushes: Array[BSPBrush] # brushes
+	#var patches_to_tessellate := {} # patch vertices, for de-duping
+	#var tessellated_patches := []
+	#
+	#var patch_collision_subdivisions: float = max(2, options.patch_detail / 2)
+	#
+	#var water_body: Node3D
+	#var slime_body: Node3D
+	#var lava_body: Node3D
+	#
+	## try to guess if the parent is a physics scene
+	##if parent is CollisionObject3D:
+		##collision_body = parent
+	##else:
+		##collision_body = StaticBody3D.new()
+		##parent.add_child(collision_body, true)
+		##collision_body.owner = bsp_scene
+#
+	## get brushes for this model
+	#for i in range(bsp_model.brush, bsp_model.brush + bsp_model.num_brushes):
+		#collision_brushes.append(brushes[i])
+#
+	## convex geometry friendly patch handler
+	#for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		#var face := faces[f]
+		#if not (face.type & FACE_TYPE.PATCH):
+			#continue
+#
+		#var texture := textures[face.texture_id]
+		## var flags := texture.flags
+		#var content_flags := texture.content_flags
+#
+		#if not content_flags & (
+			#CONTENT_FLAGS.SOLID |
+			#CONTENT_FLAGS.PLAYERCLIP |
+			#CONTENT_FLAGS.MONSTERCLIP |
+			#CONTENT_FLAGS.WATER |
+			#CONTENT_FLAGS.SLIME |
+			#CONTENT_FLAGS.LAVA |
+			#CONTENT_FLAGS.FOG
+		#):
+			#continue
+#
+		#var patch := {
+			#"meta": {
+				#"texture_name": texture.name,
+				#"flags": texture.flags,
+				#"content_flags": content_flags,
+			#},
+			#"geometry": PackedVector3Array()
+		#}
+#
+		#var width := face.size[0]
+		#var height := face.size[1]
+#
+		#for py in range(0, height - 1, 2):
+			#for px in range(0, width - 1, 2):
+				#var ctrl := []
+				#var grid := []
+#
+				## gather 3x3 control points
+				#for j in range(3):
+					#for i in range(3):
+						#var idx := face.start_vert_index + (py + j) * width + (px + i)
+						#ctrl.append(vertices[idx])
+#
+				## tessellate
+				#for y in range(patch_collision_subdivisions + 1):
+					#var ty := float(y) / patch_collision_subdivisions
+					#var row := []
+#
+					#for x in range(patch_collision_subdivisions + 1):
+						#var tx := float(x) / patch_collision_subdivisions
+#
+						#var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
+						#var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
+						#var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+#
+						#var vtx = bezier3(r0, r1, r2, ty)
+						#row.append(vtx)
+#
+					#grid.append(row)
+#
+				## build triangles
+				#for y in range(patch_collision_subdivisions):
+					#for x in range(patch_collision_subdivisions):
+						#var v0: Vector3 = grid[y][x]
+						#var v1: Vector3 = grid[y][x + 1]
+						#var v2: Vector3 = grid[y + 1][x]
+						#var v3: Vector3 = grid[y + 1][x + 1]
+#
+						#patch.geometry.append_array([
+							#v0, v3, v1,
+							#v0, v2, v3,
+						#])
+#
+		#if not patch.geometry.is_empty():
+			#tessellated_patches.append(patch)
+#
+	## now make the brush collision geometry...
+	#for brush: BSPBrush in collision_brushes:
+		#var texture_id: int = brush.texture_id
+		#var content_flags: int = textures[texture_id].content_flags
+		#var surface_flags: int = textures[texture_id].flags
+		#var collision_parent# = collision_body
+		#
+		#if parent is CollisionObject3D:
+			#collision_parent = parent
+		#else:
+			#collision_parent = StaticBody3D.new()
+			#parent.add_child(collision_parent, true)
+			#collision_parent.owner = bsp_scene
+#
+		#if not content_flags & (CONTENT_FLAGS.SOLID | CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+			#continue
+		## TODO: handle per-SURFACE collision flags as well... going to require a totally different approach than computing from planes, may not be worth level of effort.
+		## thankfully most of those are just visual.
+		#
+		#if content_flags & CONTENT_FLAGS.WATER:
+			#if !water_body:
+				#water_body = options.water_scene.instantiate()
+				#parent.add_child(water_body, true)
+				#water_body.owner = bsp_scene
+			#collision_parent = water_body
+		#if content_flags & CONTENT_FLAGS.SLIME:
+			#if !slime_body:
+				#slime_body = options.slime_scene.instantiate()
+				#parent.add_child(slime_body, true)
+				#slime_body.owner = bsp_scene
+			#collision_parent = slime_body
+		#if content_flags & CONTENT_FLAGS.LAVA:
+			#if !lava_body:
+				#lava_body = options.lava_scene.instantiate()
+				#parent.add_child(lava_body, true)
+				#lava_body.owner = bsp_scene
+			#collision_parent = lava_body
+#
+		## TODO: idtech3 shader files can take precedence, so for example:
+		## NONSOLID might not actually mean non-solid in a collision sense,
+		## because the shader says it actually is solid. Cool...
+#
+		#var metadata := []
+		#var collision_shapes := []
+		#var bp: Array[Plane] # brush planes
+		## since we lose surface_flags and such as Godot
+		## has no way to store per-face stuff
+		#var plane_metadata := {}
+		#for i in range(brush.brush_side, (brush.brush_side + brush.num_brush_sides)):
+			#var plane_index := brush_sides[i].plane
+			#var plane := planes[plane_index]
+			#var plane_normal := quantize_normal(plane.normal)
+			#bp.append(plane)
+			## quantized normal will be used as the key
+			## can be checked with quantized normal lookup
+			## for collisions and raycasts!
+			## TODO: make this optional
+			#plane_metadata[plane_normal] = {
+				## should this be the texture_id instead?
+				#"texture_name" : textures[brush_sides[i].texture_id].name,
+				#"flags" : surface_flags,
+				#"content_flags" : content_flags
+			#}
+			#metadata.append(plane_metadata)
+#
+		#var points := Geometry3D.compute_convex_mesh_points(bp)
+		#
+		## special handling for fog, since it's really more of a volume like a collision rather than a mesh.
+		## putting it here so we can use verts for the shape
+		#if content_flags & CONTENT_FLAGS.FOG:
+			#var fog_child := build_fog_volume(points, texture_id)
+			#parent.add_child(fog_child)
+			#fog_child.owner = bsp_scene
+			#continue
+		#
+		#var try_box := try_box_from_convex_points(points)
+#
+		#if try_box:
+			#collision_shapes.append(try_box)
+		#else:
+			#var collision := ConvexPolygonShape3D.new()
+			#collision.points = points
+			#collision_shapes.append(collision)
+#
+		#for i in range(collision_shapes.size()):
+			#var collision_shape := CollisionShape3D.new()
+			#collision_parent.add_child(collision_shape, true)
+			#if collision_shapes[i] is ConvexPolygonShape3D:
+				#collision_shape.shape = collision_shapes[i]
+				#collision_shape.name = "ConvexPolygonShape3D"
+			#else:
+				#collision_shape.shape = collision_shapes[i].shape
+				#collision_shape.transform = collision_shapes[i].transform
+				#collision_shape.name = "BoxShape3D"
+			#collision_shape.owner = bsp_scene
+			#collision_shape.set_meta("planes", metadata[i])
+#
+	## and finally the patch collisions!
+	#if not tessellated_patches.is_empty():
+		#for p in tessellated_patches:
+			#if p.geometry.is_empty():
+				#continue
+#
+			##var collision_parent = collision_body
+			#var collision_parent = StaticBody3D.new()
+			#
+			#var flags: SURFACE_FLAGS = p.meta.flags
+			#var content_flags: CONTENT_FLAGS = p.meta.content_flags
+#
+			#if content_flags & CONTENT_FLAGS.WATER:
+				#if !water_body:
+					#water_body = options.water_scene.instantiate()
+					#parent.add_child(water_body, true)
+					#water_body.owner = bsp_scene
+				#collision_parent = water_body
+			#if content_flags & CONTENT_FLAGS.SLIME:
+				#if !slime_body:
+					#slime_body = options.slime_scene.instantiate()
+					#parent.add_child(slime_body, true)
+					#slime_body.owner = bsp_scene
+				#collision_parent = slime_body
+			#if content_flags & CONTENT_FLAGS.LAVA:
+				#if !lava_body:
+					#lava_body = options.lava_scene.instantiate()
+					#parent.add_child(lava_body, true)
+					#lava_body.owner = bsp_scene
+				#collision_parent = lava_body
+#
+			#var collider := CollisionShape3D.new()
+			#var shape: Shape3D
+			#
+			#if content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.TRIGGER):
+				#shape = ConvexPolygonShape3D.new()
+				#shape.points = p.geometry
+				#collider.name = "ConvexPolygonShape3D"
+			#else:
+				#shape = ConcavePolygonShape3D.new()
+				#shape.set_faces(p.geometry)
+				#collider.name = "ConcavePolygonShape3D"
+			#
+			#collider.shape = shape
+			#collider.set_meta("patch", p.meta)
+			#
+			#collision_parent.add_child(collider, true)
+			#collider.owner = bsp_scene
 
 
 # get all the entities that aren't lights or worldspawn and...
@@ -1396,27 +1751,29 @@ func add_vertex_to_surface(st: SurfaceTool, v: BSPVertex, uv2: Vector2, vertex_c
 	st.set_normal(v.normal)
 	st.set_uv(v.uv)
 	st.set_uv2(uv2)
-
-	if vertex_color:
-		st.set_color(v.color)
+	
+	if options.import_vertex_colors:
+		st.set_color(v.color if vertex_color else Color(1, 1, 1, 1))
 
 	st.add_vertex(v.position)
 
 
 func generate_surface(s: Dictionary, texture_id: int, lightmap_id: int, transparent := false) -> Dictionary:
-	if not s.has(texture_id):
+	var key := "%s" % (texture_id if external_lightmaps.is_empty() else str(texture_id, "|", lightmap_id))
+	#var key := str(texture_id, "|", lightmap_id)
+	if not s.has(key):
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
 		st.set_material(material_from_path(texture_id, lightmap_id))
-		s[texture_id] = {
+		s[key] = {
 			"st": st,
 			"vertex_count": 0,
 			"transparent": transparent
 		}
-	return s[texture_id]
+	return s[key]
 
 
-func create_bsp_mesh(mesh: ArrayMesh, parent: Node) -> void:
+func create_bsp_mesh_instance(mesh: ArrayMesh, parent: Node) -> void:
 	if !mesh or mesh.get_surface_count() == 0:
 		return
 	
@@ -1432,14 +1789,13 @@ func create_bsp_mesh(mesh: ArrayMesh, parent: Node) -> void:
 
 func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 	var surfaces := {}
-	#var transparent_surfaces := {}
 
 	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
 		var face := faces[f]
 
 		var texture_id := face.texture_id
 		var lightmap_id := face.lightmap_id
-		var vertex_color := false if options.import_lightmaps or lightmap_id >= 0 else true
+		var vertex_color := false if options.import_lightmaps and lightmap_id >= 0 else true
 		
 		var surface_flags := textures[texture_id].flags
 		var content_flags := textures[texture_id].content_flags
@@ -1490,26 +1846,26 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 
 		st.index()
 		st.optimize_indices_for_cache()
-		#st.generate_normals()
-		#st.generate_tangents()
+		st.generate_normals()
+		st.generate_tangents()
 		
 		# SPLIT MODE: right now, just one mesh per surface
 		if options.split_mesh or surfaces[id].transparent:
 			var mesh := st.commit()
 			st.clear()
 			
-			create_bsp_mesh(mesh, parent)
+			create_bsp_mesh_instance(mesh, parent)
 			continue
 			
 		# BATCH MODE: one mesh per MAX_MESH_SURFACES
 		if current_mesh.get_surface_count() >= RenderingServer.MAX_MESH_SURFACES:
-			create_bsp_mesh(current_mesh, parent)
+			create_bsp_mesh_instance(current_mesh, parent)
 			current_mesh = ArrayMesh.new()
 
 		st.commit(current_mesh)
 		st.clear()
 
-	create_bsp_mesh(current_mesh, parent)
+	create_bsp_mesh_instance(current_mesh, parent)
 
 
 # if you're experimenting with Q3A maps, they do come with light ents
@@ -1567,7 +1923,7 @@ func add_lights() -> void:
 			light_node.light_energy = light_value * (options.light_brightness_multiplier / 300.0)
 			light_node.light_color = light_color
 			light_node.shadow_enabled = true # make some kind of option or ent key read?
-			# light_node.light_bake_mode = Light3D.BAKE_STATIC # maybe?
+			light_node.light_bake_mode = Light3D.BAKE_STATIC # maybe?
 			if options.import_lightmaps or (worldspawn.has("_q3map2_cmdline") and worldspawn["_q3map2_cmdline"].contains("-bounceonly")):
 				# light everything EXCEPT the map on layer 1
 				light_node.light_cull_mask = 4294967294
@@ -1617,7 +1973,17 @@ func add_world_light() -> void:
 # FIXME: not sure how flares are actually set up in idtech3
 # so consider this a placeholder.
 # TODO: can entities have billboards? if so, scrap the multimesh approach.
-#func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
+func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
+	var billboard_faces := {}
+	
+	var multi_mesh_instance := MultiMeshInstance3D.new()
+	
+	for face: BSPFace in faces:
+		if not face.type & FACE_TYPE.BILLBOARD:
+			continue
+		print(face)
+		
+	
 	#var billboard_faces := face_groups(bsp_model, [FACE_TYPE.BILLBOARD])
 	#if billboard_faces.is_empty():
 		#return
@@ -1660,6 +2026,95 @@ func add_world_light() -> void:
 		#test.owner = bsp_scene
 		#test.position = position
 #	print(billboards.size())
+
+
+#func get_vertices_and_indices(bsp_model: BSPModel) -> Dictionary:
+	#var model_vertices := PackedVector3Array()
+	#var model_indices := PackedInt32Array()
+#
+	#const SUBDIVISIONS = 2 # fixed value
+	#var stride := SUBDIVISIONS + 1
+	#var offset := 0
+#
+	#for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		#var face: BSPFace = faces[f]
+#
+		#if face.type & FACE_TYPE.BILLBOARD:
+			#continue
+#
+		#if textures[face.texture_id].flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.SKIP | SURFACE_FLAGS.HINT):
+			#continue
+#
+		#if textures[face.texture_id].content_flags & (CONTENT_FLAGS.TRANSLUCENT | CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.FOG):
+			#continue
+#
+		#if textures[face.texture_id].flags & SURFACE_FLAGS.SKY and options.remove_skies:
+			#continue
+#
+		#if face.type & FACE_TYPE.PATCH:
+			#var previous_size := occluder_vertices.size()
+#
+			#var width := face.size[0]
+			#var height := face.size[1]
+#
+			#for py in range(0, height - 1, 2):
+				#for px in range(0, width - 1, 2):
+					#var ctrl := []
+					#var grid := []
+					#
+					#var base := occluder_vertices.size()
+#
+					#for j in range(3):
+						#for i in range(3):
+							#var idx := face.start_vert_index + (py + j) * width + (px + i)
+							#ctrl.append(vertices[idx].position)
+#
+					#### Occluder vertices
+					#for y in range(SUBDIVISIONS + 1):
+						#var ty := float(y) / SUBDIVISIONS
+						#for x in range(SUBDIVISIONS + 1):
+							#var tx := float(x) / SUBDIVISIONS
+							#
+							#var r0 = bezier3(ctrl[0], ctrl[1], ctrl[2], tx)
+							#var r1 = bezier3(ctrl[3], ctrl[4], ctrl[5], tx)
+							#var r2 = bezier3(ctrl[6], ctrl[7], ctrl[8], tx)
+							#
+							#var pos = bezier3(r0, r1, r2, ty)
+							#
+							#occluder_vertices.append(pos)
+#
+					#### Occluder indices
+					#for y in range(SUBDIVISIONS):
+						#for x in range(SUBDIVISIONS):
+							#var i0 := base + y * stride + x
+							#var i1 := i0 + 1
+							#var i2 := i0 + stride
+							#var i3 := i2 + 1
+#
+							#occluder_indices.append_array([
+								#i0, i3, i1,
+								#i0, i2, i3
+							#])
+#
+			#offset += occluder_vertices.size() - previous_size
+		#else:
+			#for v in range(face.start_vert_index, face.start_vert_index + face.num_verts):
+				#occluder_vertices.append(vertices[v].position)
+#
+			#for i in range(face.start_index, face.start_index + face.num_indices):
+				#occluder_indices.append(indices[i] + offset)
+#
+			#offset += face.num_verts
+#
+	#var occluder := ArrayOccluder3D.new()
+	#occluder.set_arrays(occluder_vertices, occluder_indices)
+#
+	#var instance := OccluderInstance3D.new()
+	#instance.occluder = occluder
+#
+	#bsp_scene.add_child(instance, true)
+	#instance.owner = bsp_scene
+
 
 func add_occluder() -> void:
 	var ws: BSPModel = models[0]
@@ -1817,8 +2272,8 @@ func read_bsp(source_file: String) -> Node3D:
 	add_entities()
 	if options.import_lights:
 		add_lights()
-	#if options.import_billboards:
-		#add_billboards(models[0], bsp_scene)
+	if options.import_billboards:
+		add_billboards(models[0], bsp_scene)
 	if options.import_lightmaps:
 		add_world_light()
 	
