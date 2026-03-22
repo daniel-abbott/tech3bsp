@@ -1020,13 +1020,12 @@ func generate_collision_surface(s: Dictionary, texture_id: int, type: FACE_TYPE)
 # let's try trimesh for visible polys and then convex for clip/liquid brushes
 # compare:
 # WRATH e1m1 old method: 5 minute import, 800MB usage
-# WRATH e1m1 new method: 7 second import, 150MB usage
+# WRATH e1m1 new method: 7 second import, 142MB usage
 # unless we do one body per surface, then more like 200MB
 func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	var surfaces := {} # trimesh collisions
 	var collision_brushes: Array[BSPBrush] # brush clips and liquids
 	var patches_to_tessellate := {} # patch vertices, for de-duping
-	var tessellated_patches := []
 	
 	# reduce collision geometry for patches
 	var patch_collision_subdivisions: float = max(2, options.patch_detail / 2)
@@ -1178,13 +1177,13 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		if s.vertices.is_empty():
 			continue
 		
-		var surface_name: String = s.texture_name.get_file()
+		var texture_name: String = s.texture_name.get_file()
 		var flags: SURFACE_FLAGS = s.flags
 		var content_flags: CONTENT_FLAGS = s.content_flags
 		var collision_shape := CollisionShape3D.new()
 		var shape: Shape3D
 		
-		collision_shape.name = surface_name
+		collision_shape.name = texture_name
 		#collision_shape.set_meta("texture_name", texture_name)
 		collision_shape.set_meta("flags", flags)
 		collision_shape.set_meta("content_flags", content_flags)
@@ -1224,14 +1223,11 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 				if content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.TRIGGER):
 					shape = ConvexPolygonShape3D.new()
 					shape.points = s.vertices
-					#collider.name = "ConvexPolygonShape3D"
 				else:
 					shape = ConcavePolygonShape3D.new()
 					shape.set_faces(s.vertices)
-					#collider.name = "ConcavePolygonShape3D"
 				
 				collision_shape.shape = shape
-				#collider.set_meta("patch", p.meta)
 				
 				collision_parent.add_child(collision_shape, true)
 				collision_shape.owner = bsp_scene
@@ -1269,22 +1265,24 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		# since we lose surface_flags and such as Godot
 		# has no way to store per-face stuff
 		var plane_metadata := {}
+		
 		for i in range(brush.brush_side, (brush.brush_side + brush.num_brush_sides)):
 			var plane_index := brush_sides[i].plane
 			var plane := planes[plane_index]
 			var plane_normal := quantize_normal(plane.normal)
+			
 			bp.append(plane)
 			# quantized normal will be used as the key
 			# can be checked with quantized normal lookup
 			# for collisions and raycasts!
 			# TODO: make this optional
-			#plane_metadata[plane_normal] = {
-				## should this be the texture_id instead?
-				#"texture_name" : textures[brush_sides[i].texture_id].name,
-				#"flags" : surface_flags,
-				#"content_flags" : content_flags
-			#}
-			#metadata.append(plane_metadata)
+			plane_metadata[plane_normal] = {
+				# should this be the texture_id instead?
+				"texture_name" : textures[brush_sides[i].texture_id].name,
+				"flags" : surface_flags,
+				"content_flags" : content_flags
+			}
+			metadata.append(plane_metadata)
 
 		var points := Geometry3D.compute_convex_mesh_points(bp)
 		
@@ -1316,57 +1314,7 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 				collision_shape.transform = collision_shapes[i].transform
 				collision_shape.name = "BoxShape3D"
 			collision_shape.owner = bsp_scene
-			#collision_shape.set_meta("planes", metadata[i])
-
-	# and finally tessellated patches
-	#if not tessellated_patches.is_empty():
-		#for p in tessellated_patches:
-			#if p.vertices.is_empty():
-				#continue
-#
-			#var surface_name: String = p.texture_name.get_file()
-			#var collision_parent := collision_body
-			#var flags: SURFACE_FLAGS = p.flags
-			#var content_flags: CONTENT_FLAGS = p.content_flags
-#
-			#if content_flags & CONTENT_FLAGS.WATER:
-				#if !water_body:
-					#water_body = options.water_scene.instantiate()
-					#parent.add_child(water_body, true)
-					#water_body.owner = bsp_scene
-				#collision_parent = water_body
-			#if content_flags & CONTENT_FLAGS.SLIME:
-				#if !slime_body:
-					#slime_body = options.slime_scene.instantiate()
-					#parent.add_child(slime_body, true)
-					#slime_body.owner = bsp_scene
-				#collision_parent = slime_body
-			#if content_flags & CONTENT_FLAGS.LAVA:
-				#if !lava_body:
-					#lava_body = options.lava_scene.instantiate()
-					#parent.add_child(lava_body, true)
-					#lava_body.owner = bsp_scene
-				#collision_parent = lava_body
-#
-			#var collider := CollisionShape3D.new()
-			#var shape: Shape3D
-			#
-			#if content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.TRIGGER):
-				#shape = ConvexPolygonShape3D.new()
-				#shape.points = p.vertices
-				##collider.name = "ConvexPolygonShape3D"
-			#else:
-				#shape = ConcavePolygonShape3D.new()
-				#shape.set_faces(p.vertices)
-				##collider.name = "ConcavePolygonShape3D"
-			#
-			#collider.name = p.texture_name.get_file()
-			#
-			#collider.shape = shape
-			##collider.set_meta("patch", p.meta)
-			#
-			#collision_parent.add_child(collider, true)
-			#collider.owner = bsp_scene
+			collision_shape.set_meta("planes", metadata[i])
 
 
 # TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
