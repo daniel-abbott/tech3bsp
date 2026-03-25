@@ -1027,21 +1027,8 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 	var collision_brushes: Array[BSPBrush] # brush clips and liquids
 	var patches_to_tessellate := {} # patch vertices, for de-duping
 	
-	# reduce collision geometry for patches
+	# reduced collision geometry for patches
 	var patch_collision_subdivisions: float = max(2, options.patch_detail / 2)
-
-	var collision_body: CollisionObject3D
-
-	var water_body: Node3D
-	var slime_body: Node3D
-	var lava_body: Node3D
-
-	if parent is CollisionObject3D:
-		collision_body = parent
-	else:
-		collision_body = StaticBody3D.new()
-		parent.add_child(collision_body, true)
-		collision_body.owner = bsp_scene
 
 	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
 		var face := faces[f]
@@ -1151,13 +1138,17 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		var texture_id: int = brush.texture_id
 		var texture_name := textures[texture_id].name
 		var content_flags: CONTENT_FLAGS = textures[texture_id].content_flags
-		#var surface_flags: SURFACE_FLAGS = textures[texture_id].flags
+		var flags: SURFACE_FLAGS = textures[texture_id].flags
 
 		# HACK! the TRIGGER content flag doesn't actually get marked for trigger entities?
 		# and they keep the SOLID flag... why...
 		if content_flags & (CONTENT_FLAGS.SOLID) and texture_name.ends_with("trigger"):
 			collision_brushes.append(brush)
 			continue
+		
+		#if content_flags & CONTENT_FLAGS.TRANSLUCENT and flags & (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.NOMARKS) == (SURFACE_FLAGS.NODRAW | SURFACE_FLAGS.NOMARKS):
+			#collision_brushes.append(brush)
+			#continue
 
 		if not content_flags & (
 			CONTENT_FLAGS.PLAYERCLIP | 
@@ -1171,6 +1162,38 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			continue
 		
 		collision_brushes.append(brush)
+
+	# separate our collision layers based on the surface and content flags
+	var world_collisions := StaticBody3D.new()
+	var player_collisions := StaticBody3D.new()
+	var monster_collisions := StaticBody3D.new()
+	#FIXME: "weapclip" and similar use surface flags by default, lame
+	#var weapon_collisions := StaticBody3D.new()
+	
+	world_collisions.name = "WorldCollisions"
+	player_collisions.name = "PlayerCollisions"
+	monster_collisions.name = "MonsterCollisions"
+	#weapon_collisions.name = "WeaponCollisions"
+
+	world_collisions.collision_layer = 1
+	player_collisions.collision_layer = 2
+	monster_collisions.collision_layer = 4
+	#weapon_collisions.collision_layer = 8
+
+	world_collisions.collision_mask = 1
+	player_collisions.collision_mask = 2
+	monster_collisions.collision_mask = 4
+	#weapon_collisions.collision_mask = 8
+	
+	add_to_bsp_scene(world_collisions)
+	add_to_bsp_scene(player_collisions)
+	add_to_bsp_scene(monster_collisions)
+	#add_to_bsp_scene(weapon_collisions)
+	
+	# special bodies for liquids
+	var water_body: Node3D
+	var slime_body: Node3D
+	var lava_body: Node3D
 
 	# now let's build the collisions!
 	for s in surfaces.values():
@@ -1188,36 +1211,49 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		collision_shape.set_meta("flags", flags)
 		collision_shape.set_meta("content_flags", content_flags)
 		
+		var collision_parent: CollisionObject3D
+		
+		if parent is CollisionObject3D:
+			collision_parent = parent
+		else:
+			if content_flags & CONTENT_FLAGS.SOLID or \
+			content_flags & (
+				CONTENT_FLAGS.PLAYERCLIP |
+				CONTENT_FLAGS.MONSTERCLIP
+			) == (CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP):
+				collision_parent = world_collisions
+			elif content_flags & CONTENT_FLAGS.PLAYERCLIP:
+				collision_parent = player_collisions
+			elif content_flags & CONTENT_FLAGS.MONSTERCLIP:
+				collision_parent = monster_collisions
+		
 		match s.type:
 			FACE_TYPE.POLYGON, FACE_TYPE.MESH:
 				shape = ConcavePolygonShape3D.new()
 
 				shape.set_faces(s.vertices)
 				collision_shape.shape = shape
-
-				collision_body.add_child(collision_shape, true)
-				collision_shape.owner = bsp_scene
+				
+				add_to_bsp_scene(collision_shape, true, collision_parent)
 				
 			FACE_TYPE.PATCH:
-				var collision_parent := collision_body
+					#if flags & SURFACE_FLAGS.NOMARKS:
+						#collision_parent = weapon_collisions
 				
 				if content_flags & CONTENT_FLAGS.WATER:
 					if !water_body:
 						water_body = options.water_scene.instantiate()
-						parent.add_child(water_body, true)
-						water_body.owner = bsp_scene
+						add_to_bsp_scene(water_body, true)
 					collision_parent = water_body
 				if content_flags & CONTENT_FLAGS.SLIME:
 					if !slime_body:
 						slime_body = options.slime_scene.instantiate()
-						parent.add_child(slime_body, true)
-						slime_body.owner = bsp_scene
+						add_to_bsp_scene(slime_body, true)
 					collision_parent = slime_body
 				if content_flags & CONTENT_FLAGS.LAVA:
 					if !lava_body:
 						lava_body = options.lava_scene.instantiate()
-						parent.add_child(lava_body, true)
-						lava_body.owner = bsp_scene
+						add_to_bsp_scene(lava_body, true)
 					collision_parent = lava_body
 				
 				if content_flags & (CONTENT_FLAGS.WATER | CONTENT_FLAGS.SLIME | CONTENT_FLAGS.LAVA | CONTENT_FLAGS.TRIGGER):
@@ -1229,34 +1265,46 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 				
 				collision_shape.shape = shape
 				
-				collision_parent.add_child(collision_shape, true)
-				collision_shape.owner = bsp_scene
+				add_to_bsp_scene(collision_shape, true, collision_parent)
 
 	# clip brushes and liquids
 	for brush: BSPBrush in collision_brushes:
 		var texture_id: int = brush.texture_id
+		var flags: int = textures[texture_id].flags
 		var content_flags: int = textures[texture_id].content_flags
-		var surface_flags: int = textures[texture_id].flags
 		
-		var collision_parent = collision_body
+		var collision_parent: CollisionObject3D
+		
+		if parent is CollisionObject3D:
+			collision_parent = parent
+		else:
+			if content_flags & CONTENT_FLAGS.SOLID or \
+			content_flags & (
+				CONTENT_FLAGS.PLAYERCLIP |
+				CONTENT_FLAGS.MONSTERCLIP
+			) == (CONTENT_FLAGS.PLAYERCLIP | CONTENT_FLAGS.MONSTERCLIP):
+				collision_parent = world_collisions
+			elif content_flags & CONTENT_FLAGS.PLAYERCLIP:
+				collision_parent = player_collisions
+			elif content_flags & CONTENT_FLAGS.MONSTERCLIP:
+				collision_parent = monster_collisions
+			#if flags & SURFACE_FLAGS.NOMARKS:
+				#collision_parent = weapon_collisions
 		
 		if content_flags & CONTENT_FLAGS.WATER:
 			if !water_body:
 				water_body = options.water_scene.instantiate()
-				parent.add_child(water_body, true)
-				water_body.owner = bsp_scene
+				add_to_bsp_scene(water_body, true)
 			collision_parent = water_body
 		if content_flags & CONTENT_FLAGS.SLIME:
 			if !slime_body:
 				slime_body = options.slime_scene.instantiate()
-				parent.add_child(slime_body, true)
-				slime_body.owner = bsp_scene
+				add_to_bsp_scene(slime_body, true)
 			collision_parent = slime_body
 		if content_flags & CONTENT_FLAGS.LAVA:
 			if !lava_body:
 				lava_body = options.lava_scene.instantiate()
-				parent.add_child(lava_body, true)
-				lava_body.owner = bsp_scene
+				add_to_bsp_scene(lava_body, true)
 			collision_parent = lava_body
 
 		var metadata := []
@@ -1279,7 +1327,7 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			plane_metadata[plane_normal] = {
 				# should this be the texture_id instead?
 				"texture_name" : textures[brush_sides[i].texture_id].name,
-				"flags" : surface_flags,
+				"flags" : flags,
 				"content_flags" : content_flags
 			}
 			metadata.append(plane_metadata)
@@ -1290,8 +1338,7 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		# putting it here so we can use verts for the shape
 		if content_flags & CONTENT_FLAGS.FOG:
 			var fog_child := build_fog_volume(points, texture_id)
-			parent.add_child(fog_child)
-			fog_child.owner = bsp_scene
+			add_to_bsp_scene(fog_child, true, parent)
 			continue
 		
 		var try_box := try_box_from_convex_points(points)
@@ -1305,7 +1352,8 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 
 		for i in range(collision_shapes.size()):
 			var collision_shape := CollisionShape3D.new()
-			collision_parent.add_child(collision_shape, true)
+			add_to_bsp_scene(collision_shape, true, collision_parent)
+			
 			if collision_shapes[i] is ConvexPolygonShape3D:
 				collision_shape.shape = collision_shapes[i]
 				collision_shape.name = "ConvexPolygonShape3D"
@@ -1313,8 +1361,18 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 				collision_shape.shape = collision_shapes[i].shape
 				collision_shape.transform = collision_shapes[i].transform
 				collision_shape.name = "BoxShape3D"
-			collision_shape.owner = bsp_scene
+
 			collision_shape.set_meta("planes", metadata[i])
+
+	# cleanup (HACK maybe? this might not be generally safe for imports...)
+	if not world_collisions.get_child_count():
+		world_collisions.free()
+	if not player_collisions.get_child_count():
+		player_collisions.free()
+	if not monster_collisions.get_child_count():
+		monster_collisions.free()
+	#if not weapon_collisions.get_child_count():
+		#weapon_collisions.free()
 
 
 # TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
@@ -1630,9 +1688,8 @@ func add_entities() -> void:
 				#entity_scene[key] = entity[key]
 			#print(entity_scene.get(key))
 		
-		bsp_scene.add_child(entity_scene, true)
+		add_to_bsp_scene(entity_scene, true)
 		entity_scene.transform.origin = origin
-		entity_scene.owner = bsp_scene
 		
 		if entity.has("model") and entity["model"][0] == '*':
 			# this entity has a brush model (door, lift, trigger, etc)
@@ -1762,8 +1819,7 @@ func create_bsp_mesh_instance(mesh: ArrayMesh, parent: Node) -> void:
 	
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
-	parent.add_child(mi, true)
-	mi.owner = bsp_scene
+	add_to_bsp_scene(mi, true, parent)
 
 
 func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
@@ -1907,8 +1963,7 @@ func add_lights() -> void:
 				# light everything EXCEPT the map on layer 1
 				light_node.light_cull_mask = 4294967294
 
-			bsp_scene.add_child(light_node, true)
-			light_node.owner = bsp_scene
+			add_to_bsp_scene(light_node, true)
 
 
 # this adds a directional light which will provide a flat
@@ -1935,8 +1990,8 @@ func add_world_light() -> void:
 	# culling and visibility layers...
 	if options.entity_shadow_light:
 		directional_light.shadow_enabled = true
-	bsp_scene.add_child(directional_light, true)
-	directional_light.owner = bsp_scene
+	add_to_bsp_scene(directional_light, true)
+
 	# if there's a "_sun" light, let's use its direction
 	# ... maybe... can look terrible for some light angles
 	#for entity: Dictionary in entities:
@@ -2181,8 +2236,12 @@ func add_occluder() -> void:
 	var instance := OccluderInstance3D.new()
 	instance.occluder = occluder
 
-	bsp_scene.add_child(instance, true)
-	instance.owner = bsp_scene
+	add_to_bsp_scene(instance, true)
+
+
+func add_to_bsp_scene(child: Node, force_readable_name := true, parent: Node = bsp_scene) -> void:
+	parent.add_child(child, force_readable_name)
+	child.owner = bsp_scene
 
 
 func read_bsp(source_file: String) -> Node3D:
