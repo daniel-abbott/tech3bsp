@@ -750,21 +750,19 @@ func parse_lightmaps(lightmap_lump) -> void:
 		var bsp_path := bsp_file.get_path().rstrip(".bsp")
 		var dir := DirAccess.open(bsp_path)
 		if dir:
-			dir.list_dir_begin()
-			var entry := dir.get_next()
+			var possible_files := dir.get_files()
+			
+			for file: String in possible_files:
+				if POSSIBLE_IMAGE_EXTENSIONS.has(file.get_extension()):
+					var ext_lm_image: CompressedTexture2D = load("%s/%s" % [bsp_path, file])
+					external_lightmaps.append(ext_lm_image)
+			
+			possible_files.clear()
 
-			while entry != "":
-				if not POSSIBLE_IMAGE_EXTENSIONS.has(entry.get_extension()):
-					entry = dir.get_next()
-					continue
-				var ext_lm_image: CompressedTexture2D = load("%s/%s" % [bsp_path, entry])
-				external_lightmaps.append(ext_lm_image)
-				entry = dir.get_next()
 		else:
 			print("No external or internal lightmaps found, abandoning lightmap import.")
 			return
 
-		external_lightmaps.reverse() # gotta flip the order apparently? TODO: test on more large lightmaps!
 		print("external lightmaps: ",  external_lightmaps.size())
 		return
 	
@@ -1365,12 +1363,12 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collision_shape.set_meta("planes", metadata[i])
 
 	# cleanup (HACK maybe? this might not be generally safe for imports...)
-	if not world_collisions.get_child_count():
-		world_collisions.free()
-	if not player_collisions.get_child_count():
-		player_collisions.free()
-	if not monster_collisions.get_child_count():
-		monster_collisions.free()
+	#if not world_collisions.get_child_count():
+		#world_collisions.free()
+	#if not player_collisions.get_child_count():
+		#player_collisions.free()
+	#if not monster_collisions.get_child_count():
+		#monster_collisions.free()
 	#if not weapon_collisions.get_child_count():
 		#weapon_collisions.free()
 
@@ -1796,6 +1794,7 @@ func add_vertex_to_surface(st: SurfaceTool, v: BSPVertex, uv2: Vector2, vertex_c
 
 func generate_surface(s: Dictionary, texture_id: int, lightmap_id: int, transparent := false) -> Dictionary:
 	var key := "%s" % (texture_id if external_lightmaps.is_empty() else str(texture_id, "|", lightmap_id))
+	#print(key)
 	#var key := str(texture_id, "|", lightmap_id)
 	if not s.has(key):
 		var st := SurfaceTool.new()
@@ -1804,7 +1803,8 @@ func generate_surface(s: Dictionary, texture_id: int, lightmap_id: int, transpar
 		s[key] = {
 			"st": st,
 			"vertex_count": 0,
-			"transparent": transparent
+			"transparent": transparent,
+			#"debug": textures[texture_id].name
 		}
 	return s[key]
 
@@ -1827,6 +1827,9 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 
 	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
 		var face := faces[f]
+
+		if face.type & FACE_TYPE.BILLBOARD:
+			continue
 
 		var texture_id := face.texture_id
 		var lightmap_id := face.lightmap_id
@@ -1881,14 +1884,14 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 
 		st.index()
 		st.optimize_indices_for_cache()
-		st.generate_normals()
-		st.generate_tangents()
+		#st.generate_normals()
+		#st.generate_tangents()
 		
 		# SPLIT MODE: right now, just one mesh per surface
 		if options.split_mesh or surfaces[id].transparent:
 			var mesh := st.commit()
 			st.clear()
-			
+
 			create_bsp_mesh_instance(mesh, parent)
 			continue
 			
