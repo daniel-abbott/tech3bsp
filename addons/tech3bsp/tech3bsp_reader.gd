@@ -380,8 +380,10 @@ static func to_signed32(value: int) -> int:
 # TODO: is this even necessary?
 # also is it missing anything...
 func clear_data() -> void:
-	bsp_scene = null
-	bsp_file = null
+	if bsp_scene:
+		bsp_scene.free()
+	if bsp_file:
+		bsp_file.free()
 	entities.clear()
 	textures.clear()
 	planes.clear()
@@ -397,12 +399,16 @@ func clear_data() -> void:
 	effects.clear()
 	faces.clear()
 	external_lightmaps.clear()
-	vis_data = null
+	if vis_data:
+		vis_data.free()
 	light_grid_normalize = Vector3.ZERO
 	light_grid_offset = Vector3.ZERO
-	light_grid_ambient = null
-	light_grid_direct = null
-	light_grid_cartesian = null
+	if light_grid_ambient:
+		light_grid_ambient.free()
+	if light_grid_direct:
+		light_grid_direct.free()
+	if light_grid_cartesian:
+		light_grid_cartesian.free()
 
 
 # Use the maps texture name to perform a lookup in a user-defined
@@ -2011,14 +2017,59 @@ func add_world_light() -> void:
 # so consider this a placeholder.
 # TODO: can entities have billboards? if so, scrap the multimesh approach.
 func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
-	var billboard_faces := {}
+	var billboards := {}
+	var flare_scene: PackedScene = load("res://flare_test.tscn")
 	
-	var multi_mesh_instance := MultiMeshInstance3D.new()
-	
-	for face: BSPFace in faces:
-		if not face.type & FACE_TYPE.BILLBOARD:
+	var set_billboard := func(texture_id: int) -> Dictionary:
+		return {
+			"texture_id": texture_id,
+			"color": Color.WHITE,
+			"positions": PackedVector3Array()
+		}
+
+	for f in range(bsp_model.face, bsp_model.face + bsp_model.num_faces):
+		var face := faces[f]
+		
+		if face.type != FACE_TYPE.BILLBOARD:
 			continue
-		print(face)
+		
+		var texture_id := face.texture_id
+		
+		# maps compiled with "-skyfix" will create 6 special BILLBOARD
+		# type faces to work around an old graphics driver bug. I'm pretty sure
+		# we can just ignore them completely...
+		var texture_name := textures[texture_id].name
+		
+		if texture_name.begins_with("half_"):
+			continue
+		
+		# the flare color seems to be stored in lm_vecs, so weird
+		var flare_color: Vector3 = face.lm_vecs[0]
+
+		var color := Color(flare_color.x, flare_color.y, flare_color.z)
+
+		var key := str(texture_id, "|", color)
+
+		if not billboards.has(key):
+			billboards[key] = set_billboard.call(texture_id)
+		
+		billboards[key].color = color
+		billboards[key].positions.append(face.lm_origin)
+
+	for b: Dictionary in billboards.values():
+		#var texture_id: int = b.texture_id
+		
+		for p in b.positions:
+			var flare: MeshInstance3D = flare_scene.instantiate()
+			flare.color = b.color
+
+			add_to_bsp_scene(flare, true, parent)
+			flare.position = p
+		
+		#multimesh.mesh = mesh
+		#multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		#
+	#multimesh.instance_count = count
 		
 	
 	#var billboard_faces := face_groups(bsp_model, [FACE_TYPE.BILLBOARD])
@@ -2321,4 +2372,5 @@ func read_bsp(source_file: String) -> Node3D:
 	bsp_scene.name = source_file.get_file().get_basename()
 
 	bsp_file.close()
+	
 	return bsp_scene
