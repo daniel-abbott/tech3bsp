@@ -2010,15 +2010,11 @@ func add_world_light() -> void:
 					#directional_light.look_at_from_position(entity["origin"], e["origin"])
 
 
-# TODO: I don't know if billboards are automatically sprites (like flares)
-# so maybe some need to be built like mesh geometry?
-# TODO: using a MultiMesh3D means you can't cull per flare
-# FIXME: not sure how flares are actually set up in idtech3
-# so consider this a placeholder.
-# TODO: can entities have billboards? if so, scrap the multimesh approach.
+# TODO: This may be slow with lots of flares, should test more
+# or find a way to do it with MultiMeshes
 func add_billboards(bsp_model: BSPModel, parent: Node) -> void:
 	var billboards := {}
-	var flare_scene: PackedScene = load("res://flare_test.tscn")
+	var flare_scene: PackedScene = load("res://addons/tech3bsp/examples/billboard_example.tscn")
 	
 	var set_billboard := func(texture_id: int) -> Dictionary:
 		return {

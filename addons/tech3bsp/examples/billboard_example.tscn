@@ -1,0 +1,69 @@
+[gd_scene format=3 uid="uid://d0uyn2nb3ec5a"]
+
+[ext_resource type="Texture2D" uid="uid://b66e5tt6tpas3" path="res://addons/tech3bsp/textures/bsp_flare.png" id="1_wfrqb"]
+
+[sub_resource type="QuadMesh" id="QuadMesh_cbjte"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_eako5"]
+transparency = 1
+blend_mode = 1
+depth_draw_mode = 2
+no_depth_test = true
+shading_mode = 2
+diffuse_mode = 1
+specular_mode = 2
+albedo_texture = ExtResource("1_wfrqb")
+emission_enabled = true
+emission = Color(1, 1, 1, 1)
+emission_energy_multiplier = 2.0
+emission_operator = 1
+emission_texture = ExtResource("1_wfrqb")
+billboard_mode = 1
+fixed_size = true
+
+[sub_resource type="GDScript" id="GDScript_0jndd"]
+script/source = "extends MeshInstance3D
+
+
+@export var color: Color = Color.WHITE
+
+var mat: StandardMaterial3D
+var fade_start := 15.0
+var fade_end := 20.0
+
+
+func _ready() -> void:
+	# do it this way to work with compatibility renderer as well
+	# which doesn't support geometry fade by distance (just cull)
+	mat = get_surface_override_material(0).duplicate()
+	mat.albedo_color = color
+	mat.emission = color
+	set_surface_override_material(0, mat)
+
+
+func _physics_process(_delta: float) -> void:
+	var camera_position := get_viewport().get_camera_3d().global_position
+	var dist := global_position.distance_to(camera_position)
+	var alpha := clampf((fade_end - dist) / (fade_end - fade_start), 0.0, 1.0)
+	
+	if dist <= 20.0:
+		var params := PhysicsRayQueryParameters3D.create(global_position, camera_position)
+		var result := get_world_3d().direct_space_state.intersect_ray(params)
+
+		if result and result.collider.name != \"PlayerCharacter\":
+			mat.albedo_color.a = lerp(mat.albedo_color.a, 0.0, 0.2)
+			if is_zero_approx(mat.albedo_color.a):
+				visible = false
+		else:
+			visible = true
+			mat.albedo_color.a = lerp(mat.albedo_color.a, alpha, 0.2)
+	else:
+		mat.albedo_color.a = 0.0
+		visible = false
+"
+
+[node name="BSPFlare" type="MeshInstance3D" unique_id=884537008]
+cast_shadow = 0
+mesh = SubResource("QuadMesh_cbjte")
+surface_material_override/0 = SubResource("StandardMaterial3D_eako5")
+script = SubResource("GDScript_0jndd")
