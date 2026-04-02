@@ -36,8 +36,12 @@ func _ready() -> void:
 	# do it this way to work with compatibility renderer as well
 	# which doesn't support geometry fade by distance (just cull)
 	mat = get_surface_override_material(0).duplicate()
-	mat.albedo_color = color
-	mat.emission = color
+	if RenderingServer.get_current_rendering_method() == \"gl_compatibility\":
+		mat.albedo_color = color.srgb_to_linear()
+		mat.emission = color.srgb_to_linear()
+	else:
+		mat.albedo_color = color
+		mat.emission = color
 	set_surface_override_material(0, mat)
 
 
@@ -50,7 +54,7 @@ func _physics_process(_delta: float) -> void:
 		var params := PhysicsRayQueryParameters3D.create(global_position, camera_position)
 		var result := get_world_3d().direct_space_state.intersect_ray(params)
 
-		if result and result.collider.name != \"PlayerCharacter\":
+		if result and result.collider is StaticBody3D:
 			mat.albedo_color.a = lerp(mat.albedo_color.a, 0.0, 0.2)
 			if is_zero_approx(mat.albedo_color.a):
 				visible = false
