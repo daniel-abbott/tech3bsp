@@ -57,16 +57,20 @@ func _ready() -> void:
 
 	var axis := movement_vector.abs().max_axis_index()
 	movement_vector[axis] -= lip * sign(movement_vector[axis])
+	duration = direction.length() / speed
 
 	$Area3D.body_entered.connect(_body_entered)
 	$Area3D.body_exited.connect(_body_exited)
-	var mesh_aabb := mesh_instance.mesh.get_aabb()
-	var center := mesh_aabb.position + mesh_aabb.size * 0.5
-	duration = direction.length() / speed
-	collision_shape.position = center
-	collision_shape.shape.size.x += mesh_aabb.size.x + 1
-	collision_shape.shape.size.y = mesh_aabb.size.y
-	collision_shape.shape.size.z += mesh_aabb.size.z + 1
+
+	var mesh_aabb := mesh_instance.get_aabb()
+	var center := mesh_aabb.get_center()
+	var trigger_axis := mesh_aabb.get_shortest_axis()
+	var trigger_size := mesh_aabb.size + trigger_axis * 2.0
+	var shape := BoxShape3D.new()
+
+	collision_shape.shape = shape
+	collision_shape.global_position = center
+	collision_shape.shape.size = trigger_size
 
 
 func door_open() -> void:
