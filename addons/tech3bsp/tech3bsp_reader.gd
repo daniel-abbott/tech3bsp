@@ -557,7 +557,7 @@ func parse_entities(ent_lump) -> void:
 				"angle": # convert single angle to basis
 					# FIXME: for now let's just pass the value
 					actual_value = value.to_float()
-				"speed": # floats we can pass straight through (I think)
+				"speed", "gravity": # floats we can pass straight through (I think)
 					actual_value = value.to_float()
 				"_color", "color": # Colors!
 				# TODO: sometimes colors are bytes, should handle that.
@@ -1113,11 +1113,11 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 							for x in range(patch_collision_subdivisions + 1):
 								var tx := float(x) / patch_collision_subdivisions
 
-								var r0 = bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
-								var r1 = bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
-								var r2 = bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
+								var r0 := bezier3(ctrl[0].position, ctrl[1].position, ctrl[2].position, tx)
+								var r1 := bezier3(ctrl[3].position, ctrl[4].position, ctrl[5].position, tx)
+								var r2 := bezier3(ctrl[6].position, ctrl[7].position, ctrl[8].position, tx)
 
-								var vtx = bezier3(r0, r1, r2, ty)
+								var vtx := bezier3(r0, r1, r2, ty)
 								row.append(vtx)
 
 							grid.append(row)
@@ -1369,14 +1369,14 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 			collision_shape.set_meta("planes", metadata[i])
 
 	# cleanup (HACK maybe? this might not be generally safe for imports...)
-	#if not world_collisions.get_child_count():
-		#world_collisions.free()
-	#if not player_collisions.get_child_count():
-		#player_collisions.free()
-	#if not monster_collisions.get_child_count():
-		#monster_collisions.free()
-	#if not weapon_collisions.get_child_count():
-		#weapon_collisions.free()
+	if not world_collisions.get_child_count():
+		world_collisions.free()
+	if not player_collisions.get_child_count():
+		player_collisions.free()
+	if not monster_collisions.get_child_count():
+		monster_collisions.free()
+	if not weapon_collisions.get_child_count():
+		weapon_collisions.free()
 
 
 # TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
