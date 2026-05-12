@@ -777,8 +777,8 @@ func parse_lightmaps(lightmap_lump) -> void:
 	lightmap_columns = int(ceil(sqrt(count)))
 	lightmap_rows = int(ceil(float(count) / lightmap_columns))
 	
-	var atlas_width = lightmap_columns * DEFAULT_LIGHTMAP_SIZE
-	var atlas_height = lightmap_rows * DEFAULT_LIGHTMAP_SIZE
+	var atlas_width := lightmap_columns * DEFAULT_LIGHTMAP_SIZE
+	var atlas_height := lightmap_rows * DEFAULT_LIGHTMAP_SIZE
 	
 	var lightmap_atlas_image := Image.create_empty(atlas_width, atlas_height, false, Image.FORMAT_RGB8)
 
@@ -794,8 +794,8 @@ func parse_lightmaps(lightmap_lump) -> void:
 				img.set_pixel(x, y, lightmap_colors)
 				l += 3
 		
-		var col = i % lightmap_columns
-		var row = i / lightmap_columns
+		var col := i % lightmap_columns
+		var row := i / lightmap_columns
 		var dst := Vector2i(col * DEFAULT_LIGHTMAP_SIZE, row * DEFAULT_LIGHTMAP_SIZE)
 		
 		lightmap_atlas_image.blit_rect(
@@ -1746,13 +1746,13 @@ func tessellate_patch_face(face: BSPFace, surface: Dictionary, vertex_color: boo
 				for x in range(subdivisions + 1):
 					var tx := float(x) / float(subdivisions)
 					
-					var r0 = bezier3_vertex(ctrl[0], ctrl[1], ctrl[2], tx)
-					var r1 = bezier3_vertex(ctrl[3], ctrl[4], ctrl[5], tx)
-					var r2 = bezier3_vertex(ctrl[6], ctrl[7], ctrl[8], tx)
+					var r0 := bezier3_vertex(ctrl[0], ctrl[1], ctrl[2], tx)
+					var r1 := bezier3_vertex(ctrl[3], ctrl[4], ctrl[5], tx)
+					var r2 := bezier3_vertex(ctrl[6], ctrl[7], ctrl[8], tx)
 					
 					var vtx = bezier3_vertex(r0, r1, r2, ty)
 					
-					if options.import_lightmaps and external_lightmaps.is_empty():
+					if options.import_lightmaps and external_lightmaps.is_empty() and lightmap_columns:
 						var lm_col := face.lightmap_id % lightmap_columns
 						var lm_row := face.lightmap_id / lightmap_columns
 						vtx.uv2.x = (vtx.uv2.x + lm_col) / lightmap_columns
@@ -1773,10 +1773,10 @@ func tessellate_patch_face(face: BSPFace, surface: Dictionary, vertex_color: boo
 			
 			for y in range(subdivisions):
 				for x in range(subdivisions):
-					var i0 = base + y * stride + x
-					var i1 = i0 + 1
-					var i2 = i0 + stride
-					var i3 = i2 + 1
+					var i0 := base + y * stride + x
+					var i1 := i0 + 1
+					var i2 := i0 + stride
+					var i3 := i2 + 1
 
 					st.add_index(i0)
 					st.add_index(i3)
@@ -1867,7 +1867,7 @@ func add_bsp_model(bsp_model: BSPModel, parent: Node) -> void:
 					var vertex := vertices[v]
 					var uv2 := vertex.uv2
 					
-					if options.import_lightmaps and external_lightmaps.is_empty():
+					if options.import_lightmaps and external_lightmaps.is_empty() and lightmap_columns:
 						var lm_col := face.lightmap_id % lightmap_columns
 						var lm_row := face.lightmap_id / lightmap_columns
 						uv2.x = (uv2.x + lm_col) / lightmap_columns
