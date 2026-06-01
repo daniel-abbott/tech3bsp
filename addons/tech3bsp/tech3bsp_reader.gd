@@ -1375,8 +1375,8 @@ func add_collisions(bsp_model: BSPModel, parent: Node) -> void:
 		player_collisions.free()
 	if not monster_collisions.get_child_count():
 		monster_collisions.free()
-	if not weapon_collisions.get_child_count():
-		weapon_collisions.free()
+	#if not weapon_collisions.get_child_count():
+		#weapon_collisions.free()
 
 
 # TODO: there's a lot of duplication here now because of patches being so wildly different from brushes
