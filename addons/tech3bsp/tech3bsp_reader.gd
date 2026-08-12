@@ -557,11 +557,13 @@ func parse_entities(ent_lump) -> void:
 				"angle": # convert single angle to basis
 					# FIXME: for now let's just pass the value
 					actual_value = value.to_float()
-				"speed", "gravity": # floats we can pass straight through (I think)
+				"speed", "gravity", "lip": # floats we can pass straight through (I think)
 					actual_value = value.to_float()
 				"_color", "color": # Colors!
-				# TODO: sometimes colors are bytes, should handle that.
-					var components := value.split_floats(" ", false) 
+					var components := value.split_floats(" ", false)
+					for i in components.size():
+						if components[i] > 1.0:
+							components[i] /= 255
 					actual_value = Color(components[0], components[1], components[2])
 				_: # no idea, let's pass it as a string for now.
 					actual_value = value
