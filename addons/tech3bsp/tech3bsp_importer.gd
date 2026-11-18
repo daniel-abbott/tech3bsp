@@ -10,7 +10,7 @@ func _get_importer_name() -> String:
 
 
 func _get_visible_name() -> String:
-	return &"idTech 3 BSP"
+	return &"Tech3 BSP"
 
 
 func _get_recognized_extensions() -> PackedStringArray:
@@ -38,7 +38,6 @@ func _get_import_order() -> int:
 
 
 func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
-	var entity_map := ConfigFile.new()
 	match preset_index:
 		_:
 			return [
@@ -52,7 +51,7 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"light_attenuation",
-					"default_value": 1.0
+					"default_value": 2.0
 				},
 				{
 					"name":"entity_map",
@@ -60,19 +59,39 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"print_missing_entities",
-					"default_value":true
+					"default_value":false
 				},
 				{
 					"name":"materials_path",
-					"default_value":"materials/{texture_name}.material",
+					"default_value":"res://materials/{texture_name}.material",
 				},
 				{
-					"name":"textures_path",
-					"default_value":"textures/"
+					"name":"assets_path_override",
+					"default_value":""
 				},
 				{
-					"name":"fallback_materials",
+					"name":"use_tech3_shaders",
 					"default_value":true
+				},
+				{
+					"name":"tech3_shaders_override",
+					"default_value":""
+				},
+				{
+					"name":"shaderlist_path",
+					"default_value":""
+				},
+				{
+					"name":"save_converted_shaders",
+					"default_value":false
+				},
+				{
+					"name":"converted_shaders_path",
+					"default_value":"res://shaders/tech3/{shader_name}.gdshader"
+				},
+				{
+					"name":"overwrite_converted_shaders",
+					"default_value":false
 				},
 				{
 					"name":"water_scene",
@@ -98,7 +117,9 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"import_lightgrid",
-					"default_value":true
+					"default_value": 0,
+					"property_hint": PROPERTY_HINT_ENUM,
+					"hint_string": "Full Lightgrid,Ambient Lightgrid Only,No Lightgrid"
 				},
 				{
 					"name":"import_vertex_colors",
@@ -106,15 +127,27 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 				},
 				{
 					"name":"import_lights",
-					"default_value":false
+					"default_value": 0,
+					"property_hint": PROPERTY_HINT_ENUM,
+					"hint_string": "No lights import,Import styled lights only,Import all lights"
 				},
 				{
 					"name":"entity_shadow_light",
 					"default_value":false
 				},
 				{
+					"name":"shadow_opacity",
+					"default_value": 1.0,
+					"property_hint": PROPERTY_HINT_RANGE,
+					"hint_string": "0,1,0.01"
+				},
+				{
 					"name":"import_billboards",
 					"default_value":false
+				},
+				{
+					"name":"import_surface_sprites",
+					"default_value":true
 				},
 				{
 					"name":"split_mesh",
@@ -129,14 +162,23 @@ func _get_import_options(path: String, preset_index: int) -> Array[Dictionary]:
 					"default_value": false
 				},
 				{
+					"name":"import_skybox",
+					"default_value": false
+				},
+				{
 					"name":"patch_detail",
 					"default_value":4
+				},
+				{
+					"name":"clip_backface_collision",
+					"default_value": false
 				},
 			]
 
 
-# TODO: some conditional options maybe
 func _get_option_visibility(path: String, option_name: StringName, options: Dictionary) -> bool:
+	if option_name == &"shadow_opacity":
+		return bool(options.get("entity_shadow_light", false))
 	return true
 
 
@@ -164,7 +206,9 @@ func _import(source_file: String, save_path: String, options: Dictionary, platfo
 		printerr(&"Failed to pack scene: ", error_string(err))
 		return err
 
-	print(save_path)
-	var rs := ResourceSaver.save(ps, "%s.%s" % [save_path, _get_save_extension()])
-	tech3bsp_reader.free()
-	return OK
+	var err_save := ResourceSaver.save(ps, "%s.%s" % [save_path, _get_save_extension()])
+	for extra: String in Tech3ShaderLibrary.generated_resource_paths:
+		if extra != "" and not gen_files.has(extra):
+			gen_files.append(extra)
+	Tech3Pk3.clear_caches()
+	return err_save
